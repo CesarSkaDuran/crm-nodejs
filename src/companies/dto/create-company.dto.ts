@@ -1,0 +1,49 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsInt, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+
+export class CreateCompanyDto {
+  @ApiProperty({ example: 'DEMO' })
+  @IsString()
+  @IsNotEmpty()
+  codigo: string;
+
+  @ApiProperty({ example: 'Empresa Demo S.A.S.' })
+  @IsString()
+  @IsNotEmpty()
+  nombre: string;
+
+  @ApiPropertyOptional({ example: '900000000' })
+  @IsString()
+  @IsOptional()
+  nit?: string;
+
+  @ApiPropertyOptional({ example: '7' })
+  @IsString()
+  @IsOptional()
+  dv?: string;
+
+  @ApiPropertyOptional({ example: 'Av. 1 # 2-3' })
+  @IsString()
+  @IsOptional()
+  direccion?: string;
+
+  @ApiPropertyOptional({ example: '3210000000' })
+  @IsString()
+  @IsOptional()
+  telefono?: string;
+
+  @ApiPropertyOptional({ example: 'contacto@demo.com' })
+  @IsString()
+  @IsOptional()
+  email?: string;
+
+  @ApiPropertyOptional({ example: 'Cúcuta' })
+  @IsString()
+  @IsOptional()
+  ciudad?: string;
+
+  @ApiPropertyOptional({ example: 1, description: '1 activo, 0 inactivo' })
+  @IsInt()
+  @IsOptional()
+  estado?: number;
+}

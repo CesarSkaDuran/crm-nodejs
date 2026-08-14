@@ -1,0 +1,75 @@
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  UseGuards,
+  ParseIntPipe,
+  Query,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiTags, ApiQuery } from '@nestjs/swagger';
+import { ThirdsService } from './thirds.service';
+import { CreateThirdDto } from './dto/create-third.dto';
+import { UpdateThirdDto } from './dto/update-third.dto';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+
+@ApiBearerAuth()
+@ApiTags('Terceros')
+@UseGuards(JwtAuthGuard)
+@Controller('terceros')
+export class ThirdsController {
+  constructor(private readonly thirdsService: ThirdsService) {}
+
+  @Post()
+  create(
+    @Body() dto: CreateThirdDto,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.thirdsService.create(dto, usuario.empresa_id);
+  }
+
+  @Get()
+  @ApiQuery({
+    name: 'tipo_terceros',
+    required: false,
+    description: '1 cliente, 2 proveedor, 3 empleado, 4 vendedor, 5 otro',
+  })
+  findAll(
+    @CurrentUser() usuario: any,
+    @Query('tipo_terceros') tipoTerceros?: string,
+  ) {
+    return this.thirdsService.findAll(
+      usuario.empresa_id,
+      tipoTerceros ? Number(tipoTerceros) : undefined,
+    );
+  }
+
+  @Get(':id')
+  findOne(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.thirdsService.findOne(id, usuario.empresa_id);
+  }
+
+  @Patch(':id')
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateThirdDto,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.thirdsService.update(id, usuario.empresa_id, dto);
+  }
+
+  @Delete(':id')
+  remove(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.thirdsService.remove(id, usuario.empresa_id);
+  }
+}

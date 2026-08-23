@@ -10,6 +10,15 @@ import { AccountsModule } from './accounts/accounts.module';
 import { ThirdsModule } from './thirds/thirds.module';
 import { ProductsModule } from './products/products.module';
 import { PurchasesModule } from './purchases/purchases.module';
+import { AccountingModule } from './accounting/accounting.module';
+import { KardexModule } from './kardex/kardex.module';
+import { TipoComprobantesModule } from './tipo-comprobantes/tipo-comprobantes.module';
+import { BancosModule } from './bancos/bancos.module';
+import { TesoreriaModule } from './tesoreria/tesoreria.module';
+import { SalesModule } from './sales/sales.module';
+import { CarteraModule } from './cartera/cartera.module';
+import { CuentasPorPagarModule } from './cuentas-por-pagar/cuentas-por-pagar.module';
+import { InformesModule } from './informes/informes.module';
 
 @Module({
   imports: [
@@ -36,6 +45,15 @@ import { PurchasesModule } from './purchases/purchases.module';
     UsersModule,
     ThirdsModule,
     AccountsModule,
+    AccountingModule,
+    KardexModule,
+    TipoComprobantesModule,
+    BancosModule,
+    TesoreriaModule,
+    SalesModule,
+    CarteraModule,
+    CuentasPorPagarModule,
+    InformesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

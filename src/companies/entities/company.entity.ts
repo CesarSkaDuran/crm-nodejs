@@ -42,6 +42,9 @@ export class Company {
   consecutivo_compras: number;
 
   @Column({ default: 0 })
+  consecutivo_ventas: number;
+
+  @Column({ default: 0 })
   consecutivo_asientos: number;
 
   @CreateDateColumn()

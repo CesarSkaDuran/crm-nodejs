@@ -1,6 +1,8 @@
 import {
   Controller,
   Get,
+  Post,
+  Body,
   Param,
   Query,
   UseGuards,
@@ -8,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CuentasPorPagarService } from './cuentas-por-pagar.service';
+import { CreatePagoDto } from './dto/create-pago.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
@@ -32,5 +35,13 @@ export class CuentasPorPagarController {
     @CurrentUser() usuario: any,
   ) {
     return this.service.findOne(terceroId, usuario.empresa_id);
+  }
+
+  @Post('pago')
+  pagar(
+    @Body() dto: CreatePagoDto,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.service.pagar(dto, usuario.empresa_id, usuario.name);
   }
 }

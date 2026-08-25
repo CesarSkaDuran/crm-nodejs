@@ -10,5 +10,6 @@ import { Account } from '../accounts/entities/account.entity';
   imports: [TypeOrmModule.forFeature([AccountingEntry, AccountingEntryLine, Account])],
   controllers: [AccountingController, MovementsController],
   providers: [AccountingService],
+  exports: [AccountingService],
 })
 export class AccountingModule {}

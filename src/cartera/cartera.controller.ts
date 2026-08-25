@@ -1,6 +1,8 @@
 import {
   Controller,
   Get,
+  Post,
+  Body,
   Param,
   Query,
   UseGuards,
@@ -8,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CarteraService } from './cartera.service';
+import { CreateCobroDto } from './dto/create-cobro.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
@@ -32,5 +35,13 @@ export class CarteraController {
     @CurrentUser() usuario: any,
   ) {
     return this.carteraService.findOne(terceroId, usuario.empresa_id);
+  }
+
+  @Post('cobro')
+  cobrar(
+    @Body() dto: CreateCobroDto,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.carteraService.cobrar(dto, usuario.empresa_id, usuario.name);
   }
 }

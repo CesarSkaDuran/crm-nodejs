@@ -110,6 +110,15 @@ export class CreatePurchaseDto {
   @Type(() => Number)
   forma?: number;
 
+  @ApiPropertyOptional({
+    example: 1,
+    description: 'Banco/caja para pago de contado',
+  })
+  @IsInt()
+  @IsOptional()
+  @Type(() => Number)
+  banco_id?: number;
+
   @ApiProperty({ type: [DetalleCompraDto] })
   @IsArray()
   @ArrayMinSize(1)

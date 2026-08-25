@@ -1,8 +1,13 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Third } from '../thirds/entities/third.entity';
 import { AccountingEntryLine } from '../accounting/entities/accounting-entry.entity';
+import { Account } from '../accounts/entities/account.entity';
+import { AccountingService } from '../accounting/accounting.service';
+import { TipoComprobantesService } from '../tipo-comprobantes/tipo-comprobantes.service';
+import { BancosService } from '../bancos/bancos.service';
+import { CreateCobroDto } from './dto/create-cobro.dto';
 
 @Injectable()
 export class CarteraService {
@@ -11,6 +16,11 @@ export class CarteraService {
     private readonly thirdRepo: Repository<Third>,
     @InjectRepository(AccountingEntryLine)
     private readonly lineRepo: Repository<AccountingEntryLine>,
+    @InjectRepository(Account)
+    private readonly accountRepo: Repository<Account>,
+    private readonly accountingService: AccountingService,
+    private readonly tipoCompService: TipoComprobantesService,
+    private readonly bancosService: BancosService,
   ) {}
 
   async findAll(query: any, empresaId: number) {
@@ -88,5 +98,82 @@ export class CarteraService {
       },
       movimientos,
     };
+  }
+
+  async cobrar(dto: CreateCobroDto, empresaId: number, usuario: string) {
+    const cliente = await this.thirdRepo.findOne({
+      where: { id: dto.tercero_id, empresa_id: empresaId },
+    });
+    if (!cliente) {
+      throw new NotFoundException('Cliente no encontrado');
+    }
+    if (!cliente.cuenta_contable_id) {
+      throw new BadRequestException(
+        `El cliente ${cliente.nombre} no tiene cuenta contable asignada`,
+      );
+    }
+
+    const clienteCuenta = await this.accountRepo.findOne({
+      where: { id: cliente.cuenta_contable_id, empresa_id: empresaId },
+    });
+    if (!clienteCuenta) {
+      throw new BadRequestException('La cuenta contable del cliente no existe');
+    }
+
+    const banco = await this.bancosService.findOne(dto.banco_id, empresaId);
+    if (!banco) {
+      throw new NotFoundException('Banco/caja no encontrado');
+    }
+    if (!banco.cuenta_id) {
+      throw new BadRequestException(
+        `El banco ${banco.nombre} no tiene una cuenta del Plan Único de Cuentas asignada`,
+      );
+    }
+
+    const bancoCuenta = await this.accountRepo.findOne({
+      where: { codigo: banco.cuenta_id, empresa_id: empresaId },
+    });
+    if (!bancoCuenta) {
+      throw new BadRequestException(
+        `La cuenta contable del banco ${banco.nombre} no existe en el Plan Único de Cuentas`,
+      );
+    }
+
+    const monto = Number(dto.valor);
+    if (monto <= 0) {
+      throw new BadRequestException('El valor del cobro debe ser mayor a cero');
+    }
+
+    const consecutivo = await this.tipoCompService.nextConsecutivo(
+      dto.tipo_comprobante_id,
+      empresaId,
+    );
+
+    const asientoDto = {
+      consecutivo,
+      tipo: dto.tipo_comprobante_id,
+      fecha: dto.fecha,
+      descripcion: dto.descripcion ?? `Cobro a cliente ${cliente.nombre}`,
+      detalles: [
+        {
+          cuenta_contable_id: bancoCuenta.id,
+          descripcion:
+            dto.descripcion ?? `Entrada banco/caja cobro a ${cliente.nombre}`,
+          valor: monto,
+          naturaleza: bancoCuenta.naturaleza === 'D' ? 'D' : 'C',
+        },
+        {
+          cuenta_contable_id: cliente.cuenta_contable_id,
+          tercero_id: cliente.id,
+          descripcion: dto.descripcion ?? `Cobro a ${cliente.nombre}`,
+          valor: monto,
+          naturaleza: clienteCuenta.naturaleza === 'D' ? 'C' : 'D',
+        },
+      ],
+    };
+
+    const asiento = await this.accountingService.create(asientoDto, empresaId, usuario);
+    await this.bancosService.agregar(dto.banco_id, monto, empresaId);
+    return asiento;
   }
 }

@@ -1,0 +1,18 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsInt, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+
+export class CreateCategoriaDto {
+  @ApiProperty({ example: 'Papelería' })
+  @IsString()
+  @IsNotEmpty()
+  nombre: string;
+
+  @ApiPropertyOptional({ example: 'Artículos de papelería y oficina' })
+  @IsString()
+  @IsOptional()
+  descripcion?: string;
+
+  @ApiProperty({ example: 1, description: '1 producto, 2 servicio' })
+  @IsInt()
+  tipo: number;
+}

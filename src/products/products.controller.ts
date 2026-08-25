@@ -6,6 +6,7 @@ import {
   Patch,
   Param,
   Delete,
+  Query,
   UseGuards,
   ParseIntPipe,
 } from '@nestjs/common';
@@ -34,6 +35,19 @@ export class ProductsController {
   @Get()
   findAll(@CurrentUser() usuario: any) {
     return this.productsService.findAll(usuario.empresa_id);
+  }
+
+  @Get('sugerir-cuentas')
+  sugerirCuentas(
+    @Query('tipo') tipo: string,
+    @Query('categoria') categoria: string,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.productsService.sugerirCuentas(
+      Number(tipo || 1),
+      categoria,
+      usuario.empresa_id,
+    );
   }
 
   @Get(':id')

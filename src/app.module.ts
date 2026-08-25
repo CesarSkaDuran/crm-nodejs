@@ -19,6 +19,7 @@ import { SalesModule } from './sales/sales.module';
 import { CarteraModule } from './cartera/cartera.module';
 import { CuentasPorPagarModule } from './cuentas-por-pagar/cuentas-por-pagar.module';
 import { InformesModule } from './informes/informes.module';
+import { CategoriasModule } from './categorias/categorias.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { InformesModule } from './informes/informes.module';
     CarteraModule,
     CuentasPorPagarModule,
     InformesModule,
+    CategoriasModule,
   ],
   controllers: [AppController],
   providers: [AppService],

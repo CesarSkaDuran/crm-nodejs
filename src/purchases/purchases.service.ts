@@ -12,6 +12,7 @@ import { Product } from '../products/entities/product.entity';
 import { Third } from '../thirds/entities/third.entity';
 import { Company } from '../companies/entities/company.entity';
 import { Account } from '../accounts/entities/account.entity';
+import { Banco } from '../bancos/entities/banco.entity';
 import { Kardex } from '../kardex/entities/kardex.entity';
 import {
   AccountingEntry,
@@ -231,6 +232,7 @@ export class PurchasesService {
       movimientosKardex.forEach((k) => (k.documento_id = compraGuardada.id));
       await kardexRepo.save(movimientosKardex);
 
+      const bancoRepo = manager.getRepository(Banco);
       const consecutivoAsiento =
         'CP' + empresa.consecutivo_asientos.toString().padStart(6, '0');
 
@@ -255,13 +257,57 @@ export class PurchasesService {
         }),
       );
 
-      lineas.push(
-        contabilidadRepo.create({
+      let lineaContrapartida: Partial<AccountingEntryLine> = {
+        empresa_id: empresaId,
+        asentado_id: asentadoGuardado.id,
+        cuenta_contable_id: cuentaProveedor.id,
+        tercero_id: dto.proveedor_id,
+        descripcion: `Cuenta por pagar ${proveedor.nombre}`,
+        valor: total,
+        debito: 0,
+        credito: total,
+        naturaleza: 'C',
+        consecutivo: consecutivoAsiento,
+        fecha: dto.fecha,
+        usuario,
+        estado: 1,
+      };
+
+      if (dto.banco_id) {
+        const banco = await bancoRepo.findOne({
+          where: { id: dto.banco_id, empresa_id: empresaId },
+        });
+        if (!banco) {
+          throw new NotFoundException('Banco/caja no encontrado');
+        }
+        if (!banco.cuenta_id) {
+          throw new BadRequestException(
+            `El banco ${banco.nombre} no tiene una cuenta del Plan Único de Cuentas`,
+          );
+        }
+        const bancoCuenta = await cuentaRepo.findOne({
+          where: { codigo: banco.cuenta_id, empresa_id: empresaId },
+        });
+        if (!bancoCuenta) {
+          throw new BadRequestException(
+            `La cuenta contable del banco ${banco.nombre} no existe en el PUC`,
+          );
+        }
+        if (Number(banco.monto) < total) {
+          throw new BadRequestException(
+            `El banco ${banco.nombre} no tiene saldo suficiente`,
+          );
+        }
+
+        banco.monto = Number(banco.monto) - total;
+        await bancoRepo.save(banco);
+
+        lineaContrapartida = {
           empresa_id: empresaId,
           asentado_id: asentadoGuardado.id,
-          cuenta_contable_id: cuentaProveedor.id,
+          cuenta_contable_id: bancoCuenta.id,
           tercero_id: dto.proveedor_id,
-          descripcion: `Cuenta por pagar ${proveedor.nombre}`,
+          descripcion: `Pago contado ${banco.nombre}`,
           valor: total,
           debito: 0,
           credito: total,
@@ -270,8 +316,10 @@ export class PurchasesService {
           fecha: dto.fecha,
           usuario,
           estado: 1,
-        }),
-      );
+        };
+      }
+
+      lineas.push(contabilidadRepo.create(lineaContrapartida));
 
       await contabilidadRepo.save(lineas);
 

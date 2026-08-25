@@ -80,4 +80,16 @@ export class BancosService {
     const item = await this.findOne(id, empresaId);
     await this.repo.remove(item);
   }
+
+  async descontar(id: number, monto: number, empresaId: number) {
+    const item = await this.findOne(id, empresaId);
+    item.monto = Number(item.monto) - monto;
+    return this.repo.save(item);
+  }
+
+  async agregar(id: number, monto: number, empresaId: number) {
+    const item = await this.findOne(id, empresaId);
+    item.monto = Number(item.monto) + monto;
+    return this.repo.save(item);
+  }
 }

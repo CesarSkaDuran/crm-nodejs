@@ -1,13 +1,16 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { Third } from '../thirds/entities/third.entity';
-import { AccountingEntryLine } from '../accounting/entities/accounting-entry.entity';
+import { AccountingEntryLine, AccountingEntry } from '../accounting/entities/accounting-entry.entity';
 import { Account } from '../accounts/entities/account.entity';
+import { Banco } from '../bancos/entities/banco.entity';
+import { Company } from '../companies/entities/company.entity';
 import { AccountingService } from '../accounting/accounting.service';
 import { TipoComprobantesService } from '../tipo-comprobantes/tipo-comprobantes.service';
 import { BancosService } from '../bancos/bancos.service';
 import { CreatePagoDto } from './dto/create-pago.dto';
+import { resolveBancoCuenta, round2, assertBalanced } from '../accounting/accounting-helpers';
 
 @Injectable()
 export class CuentasPorPagarService {
@@ -18,6 +21,8 @@ export class CuentasPorPagarService {
     private readonly lineRepo: Repository<AccountingEntryLine>,
     @InjectRepository(Account)
     private readonly accountRepo: Repository<Account>,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
     private readonly accountingService: AccountingService,
     private readonly tipoCompService: TipoComprobantesService,
     private readonly bancosService: BancosService,
@@ -136,84 +141,137 @@ export class CuentasPorPagarService {
   }
 
   async pagar(dto: CreatePagoDto, empresaId: number, usuario: string) {
-    const proveedor = await this.thirdRepo.findOne({
-      where: { id: dto.tercero_id, empresa_id: empresaId },
-    });
-    if (!proveedor) {
-      throw new NotFoundException('Proveedor no encontrado');
-    }
-    if (!proveedor.cuenta_contable_id) {
-      throw new BadRequestException(
-        `El proveedor ${proveedor.nombre} no tiene cuenta contable asignada`,
+    return this.dataSource.transaction(async (manager) => {
+      const thirdRepo = manager.getRepository(Third);
+      const accountRepo = manager.getRepository(Account);
+      const bancoRepo = manager.getRepository(Banco);
+      const empresaRepo = manager.getRepository(Company);
+      const asentadoRepo = manager.getRepository(AccountingEntry);
+      const contabilidadRepo = manager.getRepository(AccountingEntryLine);
+
+      const proveedor = await thirdRepo.findOne({
+        where: { id: dto.tercero_id, empresa_id: empresaId },
+      });
+      if (!proveedor) {
+        throw new NotFoundException('Proveedor no encontrado');
+      }
+      if (!proveedor.cuenta_contable_id) {
+        throw new BadRequestException(
+          `El proveedor ${proveedor.nombre} no tiene cuenta contable asignada`,
+        );
+      }
+
+      const proveedorCuenta = await accountRepo.findOne({
+        where: { id: proveedor.cuenta_contable_id, empresa_id: empresaId },
+      });
+      if (!proveedorCuenta) {
+        throw new BadRequestException('La cuenta contable del proveedor no existe');
+      }
+
+      const banco = await bancoRepo.findOne({
+        where: { id: dto.banco_id, empresa_id: empresaId },
+      });
+      if (!banco) {
+        throw new NotFoundException('Banco/caja no encontrado');
+      }
+
+      const bancoCuenta = await resolveBancoCuenta(
+        accountRepo,
+        empresaId,
+        banco.cuenta_id,
+        banco.nombre,
       );
-    }
 
-    const proveedorCuenta = await this.accountRepo.findOne({
-      where: { id: proveedor.cuenta_contable_id, empresa_id: empresaId },
-    });
-    if (!proveedorCuenta) {
-      throw new BadRequestException('La cuenta contable del proveedor no existe');
-    }
+      const monto = round2(Number(dto.valor));
+      if (monto <= 0) {
+        throw new BadRequestException('El valor del pago debe ser mayor a cero');
+      }
+      if (monto > Number(banco.monto)) {
+        throw new BadRequestException(
+          `El banco ${banco.nombre} no tiene saldo suficiente. Disponible: ${banco.monto}`,
+        );
+      }
 
-    const banco = await this.bancosService.findOne(dto.banco_id, empresaId);
-    if (!banco) {
-      throw new NotFoundException('Banco/caja no encontrado');
-    }
-    if (!banco.cuenta_id) {
-      throw new BadRequestException(
-        `El banco ${banco.nombre} no tiene una cuenta del Plan Único de Cuentas asignada`,
-      );
-    }
+      // Descontar banco dentro de la misma transacción
+      banco.monto = round2(Number(banco.monto) - monto);
+      await bancoRepo.save(banco);
 
-    const bancoCuenta = await this.accountRepo.findOne({
-      where: { codigo: banco.cuenta_id, empresa_id: empresaId },
-    });
-    if (!bancoCuenta) {
-      throw new BadRequestException(
-        `La cuenta contable del banco ${banco.nombre} no existe en el Plan Único de Cuentas`,
-      );
-    }
+      // Generar consecutivo dentro de la transacción
+      const empresa = await empresaRepo.findOneBy({ id: empresaId });
+      if (!empresa) {
+        throw new NotFoundException('Empresa no encontrada');
+      }
+      empresa.consecutivo_asientos = (empresa.consecutivo_asientos || 0) + 1;
+      await empresaRepo.save(empresa);
 
-    const monto = Number(dto.valor);
-    if (monto <= 0) {
-      throw new BadRequestException('El valor del pago debe ser mayor a cero');
-    }
-    if (monto > Number(banco.monto)) {
-      throw new BadRequestException(
-        `El banco ${banco.nombre} no tiene saldo suficiente. Disponible: ${banco.monto}`,
-      );
-    }
+      const consecutivo =
+        'PP' + empresa.consecutivo_asientos.toString().padStart(6, '0');
 
-    const consecutivo = await this.tipoCompService.nextConsecutivo(
-      dto.tipo_comprobante_id,
-      empresaId,
-    );
+      const descripcion = dto.descripcion ?? `Pago a proveedor ${proveedor.nombre}`;
 
-    const asientoDto = {
-      consecutivo,
-      tipo: dto.tipo_comprobante_id,
-      fecha: dto.fecha,
-      descripcion: dto.descripcion ?? `Pago a proveedor ${proveedor.nombre}`,
-      detalles: [
+      const asentado = asentadoRepo.create({
+        empresa_id: empresaId,
+        consecutivo,
+        tipo: dto.tipo_comprobante_id,
+        fecha: dto.fecha,
+        descripcion,
+        total_debito: monto,
+        total_credito: monto,
+        usuario,
+        estado: 1,
+      });
+      const asentadoGuardado = await asentadoRepo.save(asentado);
+
+      const lineas: Partial<AccountingEntryLine>[] = [
         {
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
           cuenta_contable_id: proveedor.cuenta_contable_id,
           tercero_id: proveedor.id,
-          descripcion: dto.descripcion ?? `Pago a ${proveedor.nombre}`,
+          descripcion: `Pago a ${proveedor.nombre}`,
           valor: monto,
-          naturaleza: proveedorCuenta.naturaleza === 'C' ? 'D' : 'C',
+          debito: monto,
+          credito: 0,
+          naturaleza: 'D',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
         },
         {
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
           cuenta_contable_id: bancoCuenta.id,
-          descripcion:
-            dto.descripcion ?? `Salida banco/caja pago a ${proveedor.nombre}`,
+          tercero_id: proveedor.id,
+          descripcion: `Salida banco/caja pago a ${proveedor.nombre}`,
           valor: monto,
-          naturaleza: bancoCuenta.naturaleza === 'D' ? 'C' : 'D',
+          debito: 0,
+          credito: monto,
+          naturaleza: 'C',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
         },
-      ],
-    };
+      ];
 
-    const asiento = await this.accountingService.create(asientoDto, empresaId, usuario);
-    await this.bancosService.descontar(dto.banco_id, monto, empresaId);
-    return asiento;
+      // Validar balance
+      const balance = assertBalanced(
+        lineas.map((l) => ({
+          debito: Number(l.debito || 0),
+          credito: Number(l.credito || 0),
+        })),
+      );
+
+      asentadoGuardado.total_debito = balance.debito;
+      asentadoGuardado.total_credito = balance.credito;
+      await asentadoRepo.save(asentadoGuardado);
+
+      await contabilidadRepo.save(
+        lineas.map((l) => contabilidadRepo.create(l)),
+      );
+
+      return asentadoGuardado;
+    });
   }
 }

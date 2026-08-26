@@ -116,6 +116,15 @@ export class CreateSaleDto {
   @Type(() => Number)
   forma?: number;
 
+  @ApiPropertyOptional({
+    example: 1,
+    description: 'Id del banco/caja para ventas de contado. Si se omite, se asume a crédito.',
+  })
+  @IsInt()
+  @IsOptional()
+  @Type(() => Number)
+  banco_id?: number;
+
   @ApiProperty({ type: [DetalleVentaDto] })
   @IsArray()
   @ArrayMinSize(1)

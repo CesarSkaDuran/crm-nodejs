@@ -18,6 +18,12 @@ import {
   AccountingEntry,
   AccountingEntryLine,
 } from '../accounting/entities/accounting-entry.entity';
+import {
+  assertBalanced,
+  requireAccountByKeywords,
+  resolveBancoCuenta,
+  round2,
+} from '../accounting/accounting-helpers';
 
 const TIPO_ASIENTO_COMPRA = 1;
 
@@ -236,14 +242,85 @@ export class PurchasesService {
       const consecutivoAsiento =
         'CP' + empresa.consecutivo_asientos.toString().padStart(6, '0');
 
+      // Resolver cuentas de IVA, flete y retención
+      let cuentaIva: Account | null = null;
+      if (totalImpuesto > 0) {
+        cuentaIva = await requireAccountByKeywords(
+          cuentaRepo,
+          empresaId,
+          ['2408', 'iva descontable', 'iva debito', 'impuesto por pagar'],
+          'IVA descontable (compras)',
+        );
+      }
+
+      let cuentaFlete: Account | null = null;
+      if (flete > 0) {
+        cuentaFlete = await requireAccountByKeywords(
+          cuentaRepo,
+          empresaId,
+          ['2335', 'flete', 'gastos transporte', 'compra flete'],
+          'Flete / transporte (compras)',
+        );
+      }
+
+      let cuentaRetencion: Account | null = null;
+      if (retencion > 0) {
+        cuentaRetencion = await requireAccountByKeywords(
+          cuentaRepo,
+          empresaId,
+          ['2365', 'retencion', 'rte fuente', 'retencion en la fuente'],
+          'Retención en la fuente (compras)',
+        );
+      }
+
+      // Construir líneas adicionales del asiento
+      const lineasExtra: Partial<AccountingEntryLine>[] = [];
+
+      if (totalImpuesto > 0 && cuentaIva) {
+        lineasExtra.push({
+          empresa_id: empresaId,
+          cuenta_contable_id: cuentaIva.id,
+          tercero_id: dto.proveedor_id,
+          descripcion: `IVA descontable compra ${codigoCompra}`,
+          valor: round2(totalImpuesto),
+          debito: round2(totalImpuesto),
+          credito: 0,
+          naturaleza: 'D',
+          consecutivo: consecutivoAsiento,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        });
+      }
+
+      if (flete > 0 && cuentaFlete) {
+        lineasExtra.push({
+          empresa_id: empresaId,
+          cuenta_contable_id: cuentaFlete.id,
+          tercero_id: dto.proveedor_id,
+          descripcion: `Flete compra ${codigoCompra}`,
+          valor: round2(flete),
+          debito: round2(flete),
+          credito: 0,
+          naturaleza: 'D',
+          consecutivo: consecutivoAsiento,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        });
+      }
+
+      // Total a pagar/credito = base + iva + flete - retencion
+      const totalCredito = round2(baseGrava + totalImpuesto + flete - retencion);
+
       const asentado = asentadoRepo.create({
         empresa_id: empresaId,
         consecutivo: consecutivoAsiento,
         tipo: TIPO_ASIENTO_COMPRA,
         fecha: dto.fecha,
         descripcion: `Compra ${codigoCompra} - ${proveedor.nombre}`,
-        total_debito: total,
-        total_credito: total,
+        total_debito: totalCredito,
+        total_credito: totalCredito,
         usuario,
         estado: 1,
       });
@@ -257,15 +334,49 @@ export class PurchasesService {
         }),
       );
 
+      // Agregar líneas extra (IVA, flete)
+      for (const extra of lineasExtra) {
+        lineas.push(contabilidadRepo.create({ ...extra, asentado_id: asentadoGuardado.id }));
+      }
+
+      // Retención: es un crédito (resta al pago) → debito retención reduce el haber al proveedor
+      // Se registra como crédito negativo => la restamos del crédito al proveedor/banco
+      // Enfocción: retención se debita de la cuenta de retención por pagar (naturaleza C, va al haber)
+      // y reduce el monto a pagar al proveedor.
+      // Para mantener partida doble simple: agregamos retención como crédito a cuenta por pagar de retención
+      // y restamos del monto a pagar al proveedor/banco.
+      // Es decir: total a pagar al proveedor = total - retencion
+      const montoPagar = round2(totalCredito - retencion);
+
+      if (retencion > 0 && cuentaRetencion) {
+        lineas.push(
+          contabilidadRepo.create({
+            empresa_id: empresaId,
+            asentado_id: asentadoGuardado.id,
+            cuenta_contable_id: cuentaRetencion.id,
+            tercero_id: dto.proveedor_id,
+            descripcion: `Retención en la fuente compra ${codigoCompra}`,
+            valor: round2(retencion),
+            debito: 0,
+            credito: round2(retencion),
+            naturaleza: 'C',
+            consecutivo: consecutivoAsiento,
+            fecha: dto.fecha,
+            usuario,
+            estado: 1,
+          }),
+        );
+      }
+
       let lineaContrapartida: Partial<AccountingEntryLine> = {
         empresa_id: empresaId,
         asentado_id: asentadoGuardado.id,
         cuenta_contable_id: cuentaProveedor.id,
         tercero_id: dto.proveedor_id,
         descripcion: `Cuenta por pagar ${proveedor.nombre}`,
-        valor: total,
+        valor: montoPagar,
         debito: 0,
-        credito: total,
+        credito: montoPagar,
         naturaleza: 'C',
         consecutivo: consecutivoAsiento,
         fecha: dto.fecha,
@@ -280,26 +391,21 @@ export class PurchasesService {
         if (!banco) {
           throw new NotFoundException('Banco/caja no encontrado');
         }
-        if (!banco.cuenta_id) {
-          throw new BadRequestException(
-            `El banco ${banco.nombre} no tiene una cuenta del Plan Único de Cuentas`,
-          );
-        }
-        const bancoCuenta = await cuentaRepo.findOne({
-          where: { codigo: banco.cuenta_id, empresa_id: empresaId },
-        });
-        if (!bancoCuenta) {
-          throw new BadRequestException(
-            `La cuenta contable del banco ${banco.nombre} no existe en el PUC`,
-          );
-        }
-        if (Number(banco.monto) < total) {
+
+        const bancoCuenta = await resolveBancoCuenta(
+          cuentaRepo,
+          empresaId,
+          banco.cuenta_id,
+          banco.nombre,
+        );
+
+        if (Number(banco.monto) < montoPagar) {
           throw new BadRequestException(
             `El banco ${banco.nombre} no tiene saldo suficiente`,
           );
         }
 
-        banco.monto = Number(banco.monto) - total;
+        banco.monto = round2(Number(banco.monto) - montoPagar);
         await bancoRepo.save(banco);
 
         lineaContrapartida = {
@@ -308,9 +414,9 @@ export class PurchasesService {
           cuenta_contable_id: bancoCuenta.id,
           tercero_id: dto.proveedor_id,
           descripcion: `Pago contado ${banco.nombre}`,
-          valor: total,
+          valor: montoPagar,
           debito: 0,
-          credito: total,
+          credito: montoPagar,
           naturaleza: 'C',
           consecutivo: consecutivoAsiento,
           fecha: dto.fecha,
@@ -320,6 +426,18 @@ export class PurchasesService {
       }
 
       lineas.push(contabilidadRepo.create(lineaContrapartida));
+
+      // Validar que el asiento cuadre antes de guardar
+      const todasLineas = lineas.map((l) => ({
+        debito: Number((l as any).debito || 0),
+        credito: Number((l as any).credito || 0),
+      }));
+      const balance = assertBalanced(todasLineas);
+
+      // Actualizar totales del asiento con el valor real cuadrado
+      asentadoGuardado.total_debito = balance.debito;
+      asentadoGuardado.total_credito = balance.credito;
+      await asentadoRepo.save(asentadoGuardado);
 
       await contabilidadRepo.save(lineas);
 

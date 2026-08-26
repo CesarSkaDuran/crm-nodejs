@@ -17,6 +17,13 @@ import {
   AccountingEntry,
   AccountingEntryLine,
 } from '../accounting/entities/accounting-entry.entity';
+import { Banco } from '../bancos/entities/banco.entity';
+import {
+  assertBalanced,
+  requireAccountByKeywords,
+  resolveBancoCuenta,
+  round2,
+} from '../accounting/accounting-helpers';
 
 const TIPO_ASIENTO_VENTA = 2;
 
@@ -82,6 +89,7 @@ export class SalesService {
       let baseGrava = 0;
       let totalImpuesto = 0;
       let totalDescuento = 0;
+      let totalCosto = 0;
 
       for (const item of dto.detalles) {
         const producto = await productoRepo.findOne({
@@ -186,9 +194,42 @@ export class SalesService {
           estado: 1,
         });
 
+        // Costo de venta (COGS): debita cuenta de costos, acredita inventario
+        if (producto.cuenta_costos_id) {
+          lineasContables.push({
+            empresa_id: empresaId,
+            cuenta_contable_id: producto.cuenta_costos_id,
+            tercero_id: dto.cliente_id,
+            descripcion: `Costo de venta ${producto.nombre}`,
+            valor: round2(costo),
+            debito: round2(costo),
+            credito: 0,
+            naturaleza: 'D',
+            consecutivo: codigoVenta,
+            fecha: dto.fecha,
+            usuario,
+            estado: 1,
+          });
+          lineasContables.push({
+            empresa_id: empresaId,
+            cuenta_contable_id: producto.cuenta_inventarios_id,
+            tercero_id: dto.cliente_id,
+            descripcion: `Salida inventario ${producto.nombre}`,
+            valor: round2(costo),
+            debito: 0,
+            credito: round2(costo),
+            naturaleza: 'C',
+            consecutivo: codigoVenta,
+            fecha: dto.fecha,
+            usuario,
+            estado: 1,
+          });
+        }
+
         baseGrava += neto;
         totalImpuesto += valorImpuesto;
         totalDescuento += valorDescuento;
+        totalCosto += costo;
       }
 
       const flete = Number(dto.flete || 0);
@@ -233,14 +274,48 @@ export class SalesService {
       const consecutivoAsiento =
         'VT' + empresa.consecutivo_asientos.toString().padStart(6, '0');
 
+      // Resolver cuentas de IVA generado, flete y retención
+      let cuentaIva: Account | null = null;
+      if (totalImpuesto > 0) {
+        cuentaIva = await requireAccountByKeywords(
+          cuentaRepo,
+          empresaId,
+          ['2408', 'iva generado', 'iva por pagar', 'impuesto por pagar'],
+          'IVA generado (ventas)',
+        );
+      }
+
+      let cuentaFlete: Account | null = null;
+      if (flete > 0) {
+        cuentaFlete = await requireAccountByKeywords(
+          cuentaRepo,
+          empresaId,
+          ['4235', 'flete', 'ingreso flete', 'flete por cobrar'],
+          'Flete (ventas)',
+        );
+      }
+
+      let cuentaRetencion: Account | null = null;
+      if (retencion > 0) {
+        cuentaRetencion = await requireAccountByKeywords(
+          cuentaRepo,
+          empresaId,
+          ['2365', 'retencion', 'rte fuente', 'retencion en la fuente'],
+          'Retención en la fuente (ventas)',
+        );
+      }
+
+      // Total a cobrar al cliente = base + iva + flete - retencion
+      const totalCobrar = round2(baseGrava + totalImpuesto + flete - retencion);
+
       const asentado = asentadoRepo.create({
         empresa_id: empresaId,
         consecutivo: consecutivoAsiento,
         tipo: TIPO_ASIENTO_VENTA,
         fecha: dto.fecha,
         descripcion: `Venta ${codigoVenta} - ${cliente.nombre}`,
-        total_debito: total,
-        total_credito: total,
+        total_debito: round2(totalCobrar + totalCosto),
+        total_credito: round2(totalCobrar + totalCosto),
         usuario,
         estado: 1,
       });
@@ -254,15 +329,111 @@ export class SalesService {
         }),
       );
 
+      // IVA generado (crédito)
+      if (totalImpuesto > 0 && cuentaIva) {
+        lineas.push(
+          contabilidadRepo.create({
+            empresa_id: empresaId,
+            asentado_id: asentadoGuardado.id,
+            cuenta_contable_id: cuentaIva.id,
+            tercero_id: dto.cliente_id,
+            descripcion: `IVA generado venta ${codigoVenta}`,
+            valor: round2(totalImpuesto),
+            debito: 0,
+            credito: round2(totalImpuesto),
+            naturaleza: 'C',
+            consecutivo: consecutivoAsiento,
+            fecha: dto.fecha,
+            usuario,
+            estado: 1,
+          }),
+        );
+      }
+
+      // Flete cobrado (crédito - ingreso)
+      if (flete > 0 && cuentaFlete) {
+        lineas.push(
+          contabilidadRepo.create({
+            empresa_id: empresaId,
+            asentado_id: asentadoGuardado.id,
+            cuenta_contable_id: cuentaFlete.id,
+            tercero_id: dto.cliente_id,
+            descripcion: `Flete venta ${codigoVenta}`,
+            valor: round2(flete),
+            debito: 0,
+            credito: round2(flete),
+            naturaleza: 'C',
+            consecutivo: consecutivoAsiento,
+            fecha: dto.fecha,
+            usuario,
+            estado: 1,
+          }),
+        );
+      }
+
+      // Retención: debita cuenta de retención por cobrar, reduce el monto a cobrar al cliente
+      if (retencion > 0 && cuentaRetencion) {
+        lineas.push(
+          contabilidadRepo.create({
+            empresa_id: empresaId,
+            asentado_id: asentadoGuardado.id,
+            cuenta_contable_id: cuentaRetencion.id,
+            tercero_id: dto.cliente_id,
+            descripcion: `Retención en la fuente venta ${codigoVenta}`,
+            valor: round2(retencion),
+            debito: round2(retencion),
+            credito: 0,
+            naturaleza: 'D',
+            consecutivo: consecutivoAsiento,
+            fecha: dto.fecha,
+            usuario,
+            estado: 1,
+          }),
+        );
+      }
+
+      // Contrapartida: banco (contado) o cliente (crédito)
+      // monto a cobrar/pagar = total - retencion (la retención ya se debitó por separado)
+      const montoCobrar = round2(totalCobrar);
+
+      let cuentaContrapartidaId: number;
+      let descripcionContrapartida: string;
+
+      if (dto.banco_id) {
+        const bancoRepo = manager.getRepository(Banco);
+        const banco = await bancoRepo.findOne({
+          where: { id: dto.banco_id, empresa_id: empresaId },
+        });
+        if (!banco) {
+          throw new NotFoundException('Banco/caja no encontrado');
+        }
+
+        const bancoCuenta = await resolveBancoCuenta(
+          cuentaRepo,
+          empresaId,
+          banco.cuenta_id,
+          banco.nombre,
+        );
+
+        banco.monto = round2(Number(banco.monto) + montoCobrar);
+        await bancoRepo.save(banco);
+
+        cuentaContrapartidaId = bancoCuenta.id;
+        descripcionContrapartida = `Ingreso contado ${banco.nombre}`;
+      } else {
+        cuentaContrapartidaId = cliente.cuenta_contable_id;
+        descripcionContrapartida = `Cuenta por cobrar ${cliente.nombre}`;
+      }
+
       lineas.push(
         contabilidadRepo.create({
           empresa_id: empresaId,
           asentado_id: asentadoGuardado.id,
-          cuenta_contable_id: cliente.cuenta_contable_id,
+          cuenta_contable_id: cuentaContrapartidaId,
           tercero_id: dto.cliente_id,
-          descripcion: `Cuenta por cobrar ${cliente.nombre}`,
-          valor: total,
-          debito: total,
+          descripcion: descripcionContrapartida,
+          valor: montoCobrar,
+          debito: montoCobrar,
           credito: 0,
           naturaleza: 'D',
           consecutivo: consecutivoAsiento,
@@ -271,6 +442,17 @@ export class SalesService {
           estado: 1,
         }),
       );
+
+      // Validar que el asiento cuadre
+      const todasLineas = lineas.map((l) => ({
+        debito: Number((l as any).debito || 0),
+        credito: Number((l as any).credito || 0),
+      }));
+      const balance = assertBalanced(todasLineas);
+
+      asentadoGuardado.total_debito = balance.debito;
+      asentadoGuardado.total_credito = balance.credito;
+      await asentadoRepo.save(asentadoGuardado);
 
       await contabilidadRepo.save(lineas);
 

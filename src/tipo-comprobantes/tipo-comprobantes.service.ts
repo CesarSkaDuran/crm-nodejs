@@ -101,6 +101,7 @@ export class TipoComprobantesService {
     await this.repo.save(item);
 
     const numero = consecutivo.toString().padStart(4, '0');
-    return `${item.simple ?? ''}${item.prefijo ?? ''}${numero}`;
+    const prefijo = (item.prefijo || item.simple || '').trim();
+    return { consecutivo: `${prefijo}${numero}` };
   }
 }

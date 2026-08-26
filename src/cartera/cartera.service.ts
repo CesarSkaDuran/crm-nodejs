@@ -1,13 +1,16 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { Third } from '../thirds/entities/third.entity';
-import { AccountingEntryLine } from '../accounting/entities/accounting-entry.entity';
+import { AccountingEntryLine, AccountingEntry } from '../accounting/entities/accounting-entry.entity';
 import { Account } from '../accounts/entities/account.entity';
+import { Banco } from '../bancos/entities/banco.entity';
+import { Company } from '../companies/entities/company.entity';
 import { AccountingService } from '../accounting/accounting.service';
 import { TipoComprobantesService } from '../tipo-comprobantes/tipo-comprobantes.service';
 import { BancosService } from '../bancos/bancos.service';
 import { CreateCobroDto } from './dto/create-cobro.dto';
+import { resolveBancoCuenta, round2, assertBalanced } from '../accounting/accounting-helpers';
 
 @Injectable()
 export class CarteraService {
@@ -18,6 +21,8 @@ export class CarteraService {
     private readonly lineRepo: Repository<AccountingEntryLine>,
     @InjectRepository(Account)
     private readonly accountRepo: Repository<Account>,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
     private readonly accountingService: AccountingService,
     private readonly tipoCompService: TipoComprobantesService,
     private readonly bancosService: BancosService,
@@ -101,79 +106,132 @@ export class CarteraService {
   }
 
   async cobrar(dto: CreateCobroDto, empresaId: number, usuario: string) {
-    const cliente = await this.thirdRepo.findOne({
-      where: { id: dto.tercero_id, empresa_id: empresaId },
-    });
-    if (!cliente) {
-      throw new NotFoundException('Cliente no encontrado');
-    }
-    if (!cliente.cuenta_contable_id) {
-      throw new BadRequestException(
-        `El cliente ${cliente.nombre} no tiene cuenta contable asignada`,
+    return this.dataSource.transaction(async (manager) => {
+      const thirdRepo = manager.getRepository(Third);
+      const accountRepo = manager.getRepository(Account);
+      const bancoRepo = manager.getRepository(Banco);
+      const empresaRepo = manager.getRepository(Company);
+      const asentadoRepo = manager.getRepository(AccountingEntry);
+      const contabilidadRepo = manager.getRepository(AccountingEntryLine);
+
+      const cliente = await thirdRepo.findOne({
+        where: { id: dto.tercero_id, empresa_id: empresaId },
+      });
+      if (!cliente) {
+        throw new NotFoundException('Cliente no encontrado');
+      }
+      if (!cliente.cuenta_contable_id) {
+        throw new BadRequestException(
+          `El cliente ${cliente.nombre} no tiene cuenta contable asignada`,
+        );
+      }
+
+      const clienteCuenta = await accountRepo.findOne({
+        where: { id: cliente.cuenta_contable_id, empresa_id: empresaId },
+      });
+      if (!clienteCuenta) {
+        throw new BadRequestException('La cuenta contable del cliente no existe');
+      }
+
+      const banco = await bancoRepo.findOne({
+        where: { id: dto.banco_id, empresa_id: empresaId },
+      });
+      if (!banco) {
+        throw new NotFoundException('Banco/caja no encontrado');
+      }
+
+      const bancoCuenta = await resolveBancoCuenta(
+        accountRepo,
+        empresaId,
+        banco.cuenta_id,
+        banco.nombre,
       );
-    }
 
-    const clienteCuenta = await this.accountRepo.findOne({
-      where: { id: cliente.cuenta_contable_id, empresa_id: empresaId },
-    });
-    if (!clienteCuenta) {
-      throw new BadRequestException('La cuenta contable del cliente no existe');
-    }
+      const monto = round2(Number(dto.valor));
+      if (monto <= 0) {
+        throw new BadRequestException('El valor del cobro debe ser mayor a cero');
+      }
 
-    const banco = await this.bancosService.findOne(dto.banco_id, empresaId);
-    if (!banco) {
-      throw new NotFoundException('Banco/caja no encontrado');
-    }
-    if (!banco.cuenta_id) {
-      throw new BadRequestException(
-        `El banco ${banco.nombre} no tiene una cuenta del Plan Único de Cuentas asignada`,
-      );
-    }
+      // Sumar al banco dentro de la misma transacción
+      banco.monto = round2(Number(banco.monto) + monto);
+      await bancoRepo.save(banco);
 
-    const bancoCuenta = await this.accountRepo.findOne({
-      where: { codigo: banco.cuenta_id, empresa_id: empresaId },
-    });
-    if (!bancoCuenta) {
-      throw new BadRequestException(
-        `La cuenta contable del banco ${banco.nombre} no existe en el Plan Único de Cuentas`,
-      );
-    }
+      // Generar consecutivo dentro de la transacción
+      const empresa = await empresaRepo.findOneBy({ id: empresaId });
+      if (!empresa) {
+        throw new NotFoundException('Empresa no encontrada');
+      }
+      empresa.consecutivo_asientos = (empresa.consecutivo_asientos || 0) + 1;
+      await empresaRepo.save(empresa);
 
-    const monto = Number(dto.valor);
-    if (monto <= 0) {
-      throw new BadRequestException('El valor del cobro debe ser mayor a cero');
-    }
+      const consecutivo =
+        'CB' + empresa.consecutivo_asientos.toString().padStart(6, '0');
 
-    const consecutivo = await this.tipoCompService.nextConsecutivo(
-      dto.tipo_comprobante_id,
-      empresaId,
-    );
+      const descripcion = dto.descripcion ?? `Cobro a cliente ${cliente.nombre}`;
 
-    const asientoDto = {
-      consecutivo,
-      tipo: dto.tipo_comprobante_id,
-      fecha: dto.fecha,
-      descripcion: dto.descripcion ?? `Cobro a cliente ${cliente.nombre}`,
-      detalles: [
+      const asentado = asentadoRepo.create({
+        empresa_id: empresaId,
+        consecutivo,
+        tipo: dto.tipo_comprobante_id,
+        fecha: dto.fecha,
+        descripcion,
+        total_debito: monto,
+        total_credito: monto,
+        usuario,
+        estado: 1,
+      });
+      const asentadoGuardado = await asentadoRepo.save(asentado);
+
+      const lineas: Partial<AccountingEntryLine>[] = [
         {
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
           cuenta_contable_id: bancoCuenta.id,
-          descripcion:
-            dto.descripcion ?? `Entrada banco/caja cobro a ${cliente.nombre}`,
+          tercero_id: cliente.id,
+          descripcion: `Entrada banco/caja cobro a ${cliente.nombre}`,
           valor: monto,
-          naturaleza: bancoCuenta.naturaleza === 'D' ? 'D' : 'C',
+          debito: monto,
+          credito: 0,
+          naturaleza: 'D',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
         },
         {
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
           cuenta_contable_id: cliente.cuenta_contable_id,
           tercero_id: cliente.id,
-          descripcion: dto.descripcion ?? `Cobro a ${cliente.nombre}`,
+          descripcion: `Cobro a ${cliente.nombre}`,
           valor: monto,
-          naturaleza: clienteCuenta.naturaleza === 'D' ? 'C' : 'D',
+          debito: 0,
+          credito: monto,
+          naturaleza: 'C',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
         },
-      ],
-    };
+      ];
 
-    const asiento = await this.accountingService.create(asientoDto, empresaId, usuario);
-    await this.bancosService.agregar(dto.banco_id, monto, empresaId);
-    return asiento;
+      // Validar balance
+      const balance = assertBalanced(
+        lineas.map((l) => ({
+          debito: Number(l.debito || 0),
+          credito: Number(l.credito || 0),
+        })),
+      );
+
+      asentadoGuardado.total_debito = balance.debito;
+      asentadoGuardado.total_credito = balance.credito;
+      await asentadoRepo.save(asentadoGuardado);
+
+      await contabilidadRepo.save(
+        lineas.map((l) => contabilidadRepo.create(l)),
+      );
+
+      return asentadoGuardado;
+    });
   }
 }

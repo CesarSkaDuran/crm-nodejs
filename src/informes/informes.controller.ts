@@ -1,5 +1,5 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { InformesService } from './informes.service';
@@ -44,6 +44,7 @@ export class InformesController {
   }
 
   @Get('pyg')
+  @ApiOkResponse({ description: 'Estado de Resultados (P&G) con KPIs y detalle de cuentas auxiliares' })
   pyg(
     @Query() query: any,
     @CurrentUser() usuario: any,

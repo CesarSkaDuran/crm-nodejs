@@ -45,7 +45,7 @@ export class TesoreriaController {
     @Body() dto: CreateTesoreriaDto,
     @CurrentUser() usuario: any,
   ) {
-    return this.tesoreriaService.create(dto, usuario.empresa_id);
+    return this.tesoreriaService.create(dto, usuario.empresa_id, usuario.email || usuario.sub || 'sistema');
   }
 
   @Patch(':id')

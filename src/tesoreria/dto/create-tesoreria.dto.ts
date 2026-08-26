@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsDateString,
+  IsInt,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -38,8 +39,32 @@ export class CreateTesoreriaDto {
   @IsOptional()
   tercero?: string;
 
+  @ApiProperty({
+    example: 1,
+    description: '1 = ingreso (entrada de dinero), 2 = egreso (salida de dinero)',
+  })
+  @IsInt()
+  @IsNotEmpty()
+  tipo: number;
+
+  @ApiProperty({
+    example: 1,
+    description: 'Id del banco/caja afectado',
+  })
+  @IsInt()
+  @IsNotEmpty()
+  banco_id: number;
+
+  @ApiProperty({
+    example: 30,
+    description: 'Id de la cuenta contable de contrapartida (PUC)',
+  })
+  @IsInt()
+  @IsNotEmpty()
+  cuenta_contrapartida_id: number;
+
   @ApiPropertyOptional({ example: 1 })
-  @IsNumber()
+  @IsInt()
   @IsOptional()
   estado?: number;
 }

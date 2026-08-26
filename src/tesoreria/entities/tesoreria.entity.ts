@@ -32,6 +32,22 @@ export class Tesoreria {
   @Column({ nullable: true })
   tercero: string;
 
+  /** 1 = ingreso (entrada de dinero), 2 = egreso (salida de dinero) */
+  @Column({ type: 'tinyint', default: 1 })
+  tipo: number;
+
+  /** Id del banco/caja afectado */
+  @Column({ nullable: true })
+  banco_id: number;
+
+  /** Id de la cuenta contable de contrapartida (PUC) */
+  @Column({ nullable: true })
+  cuenta_contrapartida_id: number;
+
+  /** Id del asiento contable generado */
+  @Column({ nullable: true })
+  asentado_id: number;
+
   @Column({ type: 'tinyint', default: 1 })
   estado: number;
 

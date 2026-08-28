@@ -3,6 +3,13 @@ import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { InformesService } from './informes.service';
+import {
+  LibroMayorDto,
+  LibroRangoDto,
+  LibroTercerosDto,
+  BalanceGeneralDto,
+  PygDto,
+} from './dto';
 
 @ApiBearerAuth()
 @ApiTags('Informes')
@@ -13,7 +20,7 @@ export class InformesController {
 
   @Get('libro')
   libro(
-    @Query() query: any,
+    @Query() query: LibroMayorDto,
     @CurrentUser() usuario: any,
   ) {
     return this.informesService.libroMayor(query, usuario.empresa_id);
@@ -21,7 +28,7 @@ export class InformesController {
 
   @Get('rango')
   rango(
-    @Query() query: any,
+    @Query() query: LibroRangoDto,
     @CurrentUser() usuario: any,
   ) {
     return this.informesService.libroRango(query, usuario.empresa_id);
@@ -29,7 +36,7 @@ export class InformesController {
 
   @Get('terceros')
   terceros(
-    @Query() query: any,
+    @Query() query: LibroTercerosDto,
     @CurrentUser() usuario: any,
   ) {
     return this.informesService.libroTerceros(query, usuario.empresa_id);
@@ -37,7 +44,7 @@ export class InformesController {
 
   @Get('balance')
   balance(
-    @Query() query: any,
+    @Query() query: BalanceGeneralDto,
     @CurrentUser() usuario: any,
   ) {
     return this.informesService.balanceGeneral(query, usuario.empresa_id);
@@ -46,7 +53,7 @@ export class InformesController {
   @Get('pyg')
   @ApiOkResponse({ description: 'Estado de Resultados (P&G) con KPIs y detalle de cuentas auxiliares' })
   pyg(
-    @Query() query: any,
+    @Query() query: PygDto,
     @CurrentUser() usuario: any,
   ) {
     return this.informesService.pyg(query, usuario.empresa_id);

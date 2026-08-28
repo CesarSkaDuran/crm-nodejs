@@ -56,23 +56,36 @@ async function main() {
   // 3. Solo cuentas auxiliares (clasificacion=4 ya filtrado en SQL)
   console.log(`3. Total filas: ${pyg.detalle.length} (debe ser <= num auxiliares con movimientos)`);
 
-  // 4. Verificar que los KPIs coinciden con la suma del detalle
-  const sumIng = pyg.detalle.filter((r) => r.clase === '4').reduce((s, r) => s + r.saldo, 0);
-  const sumCost = pyg.detalle.filter((r) => r.clase === '6').reduce((s, r) => s + r.saldo, 0);
-  const sumGast = pyg.detalle.filter((r) => r.clase === '5').reduce((s, r) => s + r.saldo, 0);
-  console.log(`4. Suma detalle ingresos: ${sumIng.toFixed(2)} vs KPI: ${pyg.totalIngresos.toFixed(2)} ${Math.abs(sumIng - pyg.totalIngresos) < 0.01 ? '✓' : '✗'}`);
-  console.log(`   Suma detalle costos:   ${sumCost.toFixed(2)} vs KPI: ${pyg.totalCostos.toFixed(2)} ${Math.abs(sumCost - pyg.totalCostos) < 0.01 ? '✓' : '✗'}`);
-  console.log(`   Suma detalle gastos:   ${sumGast.toFixed(2)} vs KPI: ${pyg.totalGastos.toFixed(2)} ${Math.abs(sumGast - pyg.totalGastos) < 0.01 ? '✓' : '✗'}`);
+  // 4. Verificar que los KPIs coinciden con la suma del detalle (solo auxiliares, excluyendo raíces virtuales)
+  const auxiliares = pyg.detalle.filter((r) => !r.esVirtual);
+  const sumIng = auxiliares.filter((r) => r.clase === '4').reduce((s, r) => s + r.saldo, 0);
+  const sumCost = auxiliares.filter((r) => r.clase === '6').reduce((s, r) => s + r.saldo, 0);
+  const sumGast = auxiliares.filter((r) => r.clase === '5').reduce((s, r) => s + r.saldo, 0);
+  console.log(`4. Suma auxiliares ingresos: ${sumIng.toFixed(2)} vs KPI: ${pyg.totalIngresos.toFixed(2)} ${Math.abs(sumIng - pyg.totalIngresos) < 0.01 ? '✓' : '✗'}`);
+  console.log(`   Suma auxiliares costos:   ${sumCost.toFixed(2)} vs KPI: ${pyg.totalCostos.toFixed(2)} ${Math.abs(sumCost - pyg.totalCostos) < 0.01 ? '✓' : '✗'}`);
+  console.log(`   Suma auxiliares gastos:   ${sumGast.toFixed(2)} vs KPI: ${pyg.totalGastos.toFixed(2)} ${Math.abs(sumGast - pyg.totalGastos) < 0.01 ? '✓' : '✗'}`);
 
-  // 5. Utilidad = Ingresos - Costos - Gastos
+  // 5. Verificar que los nodos raíz virtuales tienen el saldo consolidado correcto
+  const raiz4 = pyg.detalle.find((r) => r.codigo === '4' && r.esVirtual);
+  const raiz6 = pyg.detalle.find((r) => r.codigo === '6' && r.esVirtual);
+  console.log(`5. Raíz "4 INGRESOS" saldo (${raiz4?.saldo}) = KPI (${pyg.totalIngresos}): ${raiz4 && Math.abs(raiz4.saldo - pyg.totalIngresos) < 0.01 ? '✓' : '✗'}`);
+  console.log(`   Raíz "6 COSTOS DE VENTAS" saldo (${raiz6?.saldo}) = KPI (${pyg.totalCostos}): ${raiz6 && Math.abs(raiz6.saldo - pyg.totalCostos) < 0.01 ? '✓' : '✗'}`);
+
+  // 6. Utilidad = Ingresos - Costos - Gastos
   const utilCalc = pyg.totalIngresos - pyg.totalCostos - pyg.totalGastos;
-  console.log(`5. Utilidad calculada: ${utilCalc.toFixed(2)} vs KPI: ${pyg.utilidadPerdida.toFixed(2)} ${Math.abs(utilCalc - pyg.utilidadPerdida) < 0.01 ? '✓' : '✗'}`);
+  console.log(`6. Utilidad calculada: ${utilCalc.toFixed(2)} vs KPI: ${pyg.utilidadPerdida.toFixed(2)} ${Math.abs(utilCalc - pyg.utilidadPerdida) < 0.01 ? '✓' : '✗'}`);
 
-  // 6. Ecuación contable: Activo - Pasivo - Patrimonio = Utilidad
+  // 7. Verificar que los nodos raíz tienen nivel=1 y esPadre=true
+  const raices = pyg.detalle.filter((r) => r.esVirtual);
+  const raicesOk = raices.every((r) => r.nivel === 1 && r.esPadre === true);
+  console.log(`7. Nodos raíz virtuales con nivel=1 y esPadre=true: ${raicesOk ? '✓' : '✗'} (${raices.length} raíces)`);
+
+  // 8. Ecuación contable: el resultado del P&G debe cuadrar con el balance
   const balanceRes = await fetch(`${BASE}/informes/balance`, { headers: auth });
   const balance = await balanceRes.json();
-  const diffBalance = balance.totales.activo - balance.totales.pasivo - balance.totales.patrimonio;
-  console.log(`6. Balance: Activo-Pasivo-Patrimonio = ${diffBalance.toFixed(2)} vs Utilidad P&G = ${pyg.utilidadPerdida.toFixed(2)} ${Math.abs(diffBalance - pyg.utilidadPerdida) < 0.01 ? '✓ CUADRA' : '✗ NO CUADRA'}`);
+  const diffBalance = balance.saldo_final;
+  console.log(`8. Balance saldo_final (debe ser ~0): ${diffBalance.toFixed(4)} ${Math.abs(diffBalance) < 0.01 ? '✓ CUADRA' : '✗ NO CUADRA'}`);
+  console.log(`   Balance resultado_ejercicio (${balance.totales.resultado_ejercicio}) vs P&G utilidadPerdida (${pyg.utilidadPerdida}): ${Math.abs(balance.totales.resultado_ejercicio - pyg.utilidadPerdida) < 0.01 ? '✓' : '✗'}`);
 }
 
 main().catch(console.error);

@@ -34,6 +34,9 @@ import { CategoriasModule } from './categorias/categorias.module';
         username: config.get<string>('DB_USERNAME', 'crm_user'),
         password: config.get<string>('DB_PASSWORD', 'crm_pass'),
         database: config.get<string>('DB_DATABASE', 'crm_db'),
+        // Charset UTF-8 completo (utf8mb4) para soportar tildes, ñ y
+        // caracteres especiales sin mojibake (ej. "SAN JOSÉ DE CÚCUTA").
+        charset: 'utf8mb4',
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
         synchronize: config.get<string>('NODE_ENV') === 'development',
         logging: config.get<string>('NODE_ENV') === 'development',

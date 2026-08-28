@@ -113,6 +113,19 @@ export class SalesService {
           );
         }
 
+        // El costo de venta (COGS) es obligatorio para todas las ventas.
+        // Sin esta cuenta, el asiento contable quedaría incompleto: se
+        // registraría el ingreso y la salida de inventario, pero NO el
+        // costo de venta, rompiendo la homogeneidad de los asientos.
+        if (!producto.cuenta_costos_id) {
+          throw new BadRequestException(
+            `El producto ${producto.nombre} no tiene cuenta de costos de venta asignada. ` +
+              `Configure la cuenta de costos (clase 6) en el maestro de productos ` +
+              `para que todas las ventas registren correctamente el costo de venta, ` +
+              `la salida de inventario y el ingreso.`,
+          );
+        }
+
         const cantidad = Number(item.cantidad);
         const precioUnitario = Number(item.precio_unitario);
         if (cantidad <= 0 || precioUnitario < 0) {
@@ -194,37 +207,40 @@ export class SalesService {
           estado: 1,
         });
 
-        // Costo de venta (COGS): debita cuenta de costos, acredita inventario
-        if (producto.cuenta_costos_id) {
-          lineasContables.push({
-            empresa_id: empresaId,
-            cuenta_contable_id: producto.cuenta_costos_id,
-            tercero_id: dto.cliente_id,
-            descripcion: `Costo de venta ${producto.nombre}`,
-            valor: round2(costo),
-            debito: round2(costo),
-            credito: 0,
-            naturaleza: 'D',
-            consecutivo: codigoVenta,
-            fecha: dto.fecha,
-            usuario,
-            estado: 1,
-          });
-          lineasContables.push({
-            empresa_id: empresaId,
-            cuenta_contable_id: producto.cuenta_inventarios_id,
-            tercero_id: dto.cliente_id,
-            descripcion: `Salida inventario ${producto.nombre}`,
-            valor: round2(costo),
-            debito: 0,
-            credito: round2(costo),
-            naturaleza: 'C',
-            consecutivo: codigoVenta,
-            fecha: dto.fecha,
-            usuario,
-            estado: 1,
-          });
-        }
+        // Costo de venta (COGS): debita cuenta de costos, acredita inventario.
+        //
+        // Siempre se registran ambas líneas (costo de venta + salida de
+        // inventario) para todas las ventas, garantizando homogeneidad
+        // en los asientos contables. La validación de cuenta_costos_id
+        // se hizo arriba, por lo que aquí ya es seguro usarla.
+        lineasContables.push({
+          empresa_id: empresaId,
+          cuenta_contable_id: producto.cuenta_costos_id,
+          tercero_id: dto.cliente_id,
+          descripcion: `Costo de venta ${producto.nombre}`,
+          valor: round2(costo),
+          debito: round2(costo),
+          credito: 0,
+          naturaleza: 'D',
+          consecutivo: codigoVenta,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        });
+        lineasContables.push({
+          empresa_id: empresaId,
+          cuenta_contable_id: producto.cuenta_inventarios_id,
+          tercero_id: dto.cliente_id,
+          descripcion: `Salida inventario ${producto.nombre}`,
+          valor: round2(costo),
+          debito: 0,
+          credito: round2(costo),
+          naturaleza: 'C',
+          consecutivo: codigoVenta,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        });
 
         baseGrava += neto;
         totalImpuesto += valorImpuesto;

@@ -24,6 +24,8 @@ import {
   resolveBancoCuenta,
   round2,
 } from '../accounting/accounting-helpers';
+import { CuentasPorPagarService } from '../cuentas-por-pagar/cuentas-por-pagar.service';
+import { PeriodoCredito } from '../cartera/entities/credito.entity';
 
 const TIPO_ASIENTO_COMPRA = 1;
 
@@ -34,7 +36,26 @@ export class PurchasesService {
     private readonly compraRepo: Repository<Purchase>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    private readonly cxpService: CuentasPorPagarService,
   ) {}
+
+  private async obtenerConsecutivoAtomico(
+    manager: any,
+    empresaId: number,
+    campo: 'consecutivo_compras' | 'consecutivo_asientos',
+    prefijo: string,
+  ): Promise<string> {
+    await manager.query(
+      `UPDATE empresas SET ${campo} = ${campo} + 1 WHERE id = ?`,
+      [empresaId],
+    );
+    const [rows] = await manager.query(
+      `SELECT ${campo} FROM empresas WHERE id = ?`,
+      [empresaId],
+    );
+    const numero = rows?.[0]?.[campo] || rows?.[campo] || 0;
+    return prefijo + String(numero).padStart(6, '0');
+  }
 
   async create(dto: CreatePurchaseDto, empresaId: number, usuario: string) {
     return this.dataSource.transaction(async (manager) => {
@@ -75,12 +96,18 @@ export class PurchasesService {
         );
       }
 
-      empresa.consecutivo_compras = (empresa.consecutivo_compras || 0) + 1;
-      empresa.consecutivo_asientos = (empresa.consecutivo_asientos || 0) + 1;
-      await empresaRepo.save(empresa);
-
-      const codigoCompra =
-        'FC' + empresa.consecutivo_compras.toString().padStart(6, '0');
+      const codigoCompra = await this.obtenerConsecutivoAtomico(
+        manager,
+        empresaId,
+        'consecutivo_compras',
+        'FC',
+      );
+      const consecutivoAsiento = await this.obtenerConsecutivoAtomico(
+        manager,
+        empresaId,
+        'consecutivo_asientos',
+        'CP',
+      );
 
       const detalles: PurchaseDetail[] = [];
       const movimientosKardex: Kardex[] = [];
@@ -134,16 +161,18 @@ export class PurchasesService {
         const neto = bruto - valorDescuento;
         const valorImpuesto = (neto * impuestoItem) / 100;
 
-        const cantidadAnterior = Number(producto.stock);
-        const promedioAnterior = Number(producto.promedio);
-        const saldoAnterior = cantidadAnterior * promedioAnterior;
+        const cantidadAnterior = round2(Number(producto.stock));
+        const saldoAnterior = round2(Number(producto.saldo_inventario));
+        const promedioAnterior =
+          cantidadAnterior > 0 ? saldoAnterior / cantidadAnterior : 0;
 
-        const cantidadActual = cantidadAnterior + cantidad;
-        const saldoActual = saldoAnterior + neto;
+        const cantidadActual = round2(cantidadAnterior + cantidad);
+        const saldoActual = round2(saldoAnterior + neto);
         const promedioActual =
           cantidadActual > 0 ? saldoActual / cantidadActual : costoUnitario;
 
         producto.stock = cantidadActual;
+        producto.saldo_inventario = saldoActual;
         producto.promedio = promedioActual;
         producto.ultimo_precio = costoUnitario;
         await productoRepo.save(producto);
@@ -239,8 +268,6 @@ export class PurchasesService {
       await kardexRepo.save(movimientosKardex);
 
       const bancoRepo = manager.getRepository(Banco);
-      const consecutivoAsiento =
-        'CP' + empresa.consecutivo_asientos.toString().padStart(6, '0');
 
       // Resolver cuentas de IVA, flete y retención
       let cuentaIva: Account | null = null;
@@ -441,6 +468,23 @@ export class PurchasesService {
 
       await contabilidadRepo.save(lineas);
 
+      // Si la compra es a crédito (sin banco), crear el crédito con plan de cuotas
+      if (!dto.banco_id && montoPagar > 0) {
+        const numCuotas = dto.numero_cuotas || 1;
+        const periodo = dto.periodo_cuotas || PeriodoCredito.MENSUAL;
+        await this.cxpService.crearCreditoDesdeCompra(
+          empresaId,
+          dto.proveedor_id,
+          codigoCompra,
+          dto.fecha,
+          montoPagar,
+          numCuotas,
+          periodo,
+          dto.tasa_mora || 0,
+          manager,
+        );
+      }
+
       return compraRepo.findOne({
         where: { id: compraGuardada.id },
         relations: ['detalles', 'detalles.producto', 'proveedor'],
@@ -465,5 +509,137 @@ export class PurchasesService {
       throw new NotFoundException('Compra no encontrada');
     }
     return compra;
+  }
+
+  /**
+   * Anula una compra con reversa completa:
+   * - Resta el stock de los productos
+   * - Reversa el banco (si fue de contado)
+   * - Genera asiento contable de reversión
+   */
+  async anular(id: number, empresaId: number, usuario: string) {
+    const compra = await this.findOne(id, empresaId);
+    if (compra.estado === 0) {
+      throw new BadRequestException('La compra ya está anulada');
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      const compraRepo = manager.getRepository(Purchase);
+      const detalleRepo = manager.getRepository(PurchaseDetail);
+      const productoRepo = manager.getRepository(Product);
+      const empresaRepo = manager.getRepository(Company);
+      const asentadoRepo = manager.getRepository(AccountingEntry);
+      const contabilidadRepo = manager.getRepository(AccountingEntryLine);
+      const kardexRepo = manager.getRepository(Kardex);
+
+      // 1. Restar stock
+      const detalles = await detalleRepo.find({ where: { compra_id: id } });
+      for (const det of detalles) {
+        const producto = await productoRepo.findOne({ where: { id: det.producto_id } });
+        if (producto) {
+          if (Number(producto.stock) < Number(det.cantidad)) {
+            throw new BadRequestException(
+              `No se puede anular: stock insuficiente del producto ${producto.nombre} (stock: ${producto.stock}, cantidad a restar: ${det.cantidad})`,
+            );
+          }
+          producto.stock = round2(Number(producto.stock) - Number(det.cantidad));
+          await productoRepo.save(producto);
+
+          // Kardex de reversión
+          const kardex = kardexRepo.create({
+            empresa_id: empresaId,
+            producto_id: producto.id,
+            tipo_documento: 'anulacion_compra',
+            documento_id: compra.id,
+            consecutivo: 'ANC' + compra.id,
+            fecha: new Date().toISOString().split('T')[0],
+            cantidad_anterior: Number(producto.stock) + Number(det.cantidad),
+            saldo_anterior: round2((Number(producto.stock) + Number(det.cantidad)) * Number(det.costo_unitario)),
+            promedio_anterior: Number(det.costo_unitario),
+            valor_unitario: Number(det.costo_unitario),
+            entradas: 0,
+            salidas: Number(det.cantidad),
+            valor_entradas: 0,
+            valor_salidas: round2(Number(det.cantidad) * Number(det.costo_unitario)),
+            total: round2(Number(det.cantidad) * Number(det.costo_unitario)),
+            cantidad_actual: Number(producto.stock),
+            saldo_actual: round2(Number(producto.stock) * Number(det.costo_unitario)),
+            promedio_actual: Number(det.costo_unitario),
+            estado: 1,
+          });
+          await kardexRepo.save(kardex);
+        }
+      }
+
+      // 2. Generar asiento contable de reversión
+      const consecutivo = await this.obtenerConsecutivoAtomico(
+        manager,
+        empresaId,
+        'consecutivo_asientos',
+        'ANC',
+      );
+      const montoTotal = round2(Number(compra.total));
+
+      // Buscar asiento original para reversar
+      const asientoOriginal = await asentadoRepo.findOne({
+        where: { consecutivo: compra.codigo, empresa_id: empresaId },
+      });
+
+      let lineasReversion: Partial<AccountingEntryLine>[] = [];
+
+      if (asientoOriginal) {
+        const lineasOriginales = await contabilidadRepo.find({
+          where: { asentado_id: asientoOriginal.id },
+        });
+
+        lineasReversion = lineasOriginales.map((l) => ({
+          empresa_id: empresaId,
+          cuenta_contable_id: l.cuenta_contable_id,
+          tercero_id: l.tercero_id,
+          descripcion: `[ANULACIÓN] ${l.descripcion}`,
+          valor: Number(l.valor),
+          debito: Number(l.credito),
+          credito: Number(l.debito),
+          naturaleza: Number(l.credito) > 0 ? 'D' : 'C',
+          consecutivo,
+          fecha: new Date().toISOString().split('T')[0],
+          usuario,
+          estado: 1,
+        }));
+      }
+
+      const asentado = asentadoRepo.create({
+        empresa_id: empresaId,
+        consecutivo,
+        tipo: 6,
+        fecha: new Date().toISOString().split('T')[0],
+        descripcion: `Anulación de compra ${compra.codigo}`,
+        total_debito: montoTotal,
+        total_credito: montoTotal,
+        usuario,
+        estado: 1,
+      });
+      const asentadoGuardado = await asentadoRepo.save(asentado);
+
+      if (lineasReversion.length > 0) {
+        lineasReversion.forEach((l) => (l.asentado_id = asentadoGuardado.id));
+        const balance = assertBalanced(lineasReversion.map((l) => ({ debito: Number(l.debito || 0), credito: Number(l.credito || 0) })));
+        asentadoGuardado.total_debito = balance.debito;
+        asentadoGuardado.total_credito = balance.credito;
+        await asentadoRepo.save(asentadoGuardado);
+        await contabilidadRepo.save(lineasReversion.map((l) => contabilidadRepo.create(l)));
+      }
+
+      // 3. Marcar compra como anulada
+      compra.estado = 0;
+      await compraRepo.save(compra);
+
+      return {
+        ok: true,
+        compra: { id: compra.id, codigo: compra.codigo, estado: 0 },
+        asentado: asentadoGuardado,
+        mensaje: `Compra ${compra.codigo} anulada correctamente. Stock reversado, asiento de reversión generado.`,
+      };
+    });
   }
 }

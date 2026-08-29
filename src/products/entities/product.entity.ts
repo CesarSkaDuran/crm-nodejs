@@ -28,6 +28,9 @@ export class Product {
   codigo: string;
 
   @Column({ nullable: true })
+  categoria_id: number;
+
+  @Column({ nullable: true })
   cod_barra: string;
 
   @Column()
@@ -67,6 +70,9 @@ export class Product {
   promedio: number;
 
   @Column('decimal', { precision: 15, scale: 2, default: 0 })
+  saldo_inventario: number;
+
+  @Column('decimal', { precision: 15, scale: 2, default: 0 })
   ultimo_precio: number;
 
   @Column('decimal', { precision: 15, scale: 2, default: 0 })
@@ -77,6 +83,15 @@ export class Product {
 
   @Column('decimal', { precision: 15, scale: 2, default: 0 })
   pvp3: number;
+
+  @Column('decimal', { precision: 15, scale: 2, default: 0, comment: 'PVP4 = pvp1 + IVA (calculado)' })
+  pvp4: number;
+
+  @Column('decimal', { precision: 15, scale: 2, default: 0 })
+  pvp5: number;
+
+  @Column('decimal', { precision: 15, scale: 2, default: 0, comment: 'Costo unitario + flete prorrateado' })
+  costo_flete: number;
 
   @Column('decimal', { precision: 15, scale: 2, default: 0 })
   flete: number;

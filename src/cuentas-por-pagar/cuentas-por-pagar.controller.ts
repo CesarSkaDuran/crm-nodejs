@@ -10,7 +10,9 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CuentasPorPagarService } from './cuentas-por-pagar.service';
-import { CreatePagoDto } from './dto/create-pago.dto';
+import { CreateCreditoProveedorDto } from './dto/create-credito-proveedor.dto';
+import { RegistrarPagoDto } from './dto/registrar-pago.dto';
+import { PosfecharPagoDto } from './dto/posfechar-pago.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
@@ -22,11 +24,21 @@ export class CuentasPorPagarController {
   constructor(private readonly service: CuentasPorPagarService) {}
 
   @Get()
-  findAll(
-    @Query() query: any,
+  findAll(@Query() query: any, @CurrentUser() usuario: any) {
+    return this.service.findAll(query, usuario.empresa_id);
+  }
+
+  @Get('cuotas-vencidas')
+  cuotasVencidas(@Query() query: any, @CurrentUser() usuario: any) {
+    return this.service.cuotasVencidas(usuario.empresa_id, query);
+  }
+
+  @Get('credito/:creditoId')
+  findCredito(
+    @Param('creditoId', ParseIntPipe) creditoId: number,
     @CurrentUser() usuario: any,
   ) {
-    return this.service.findAll(query, usuario.empresa_id);
+    return this.service.findCredito(creditoId, usuario.empresa_id);
   }
 
   @Get(':terceroId')
@@ -37,11 +49,27 @@ export class CuentasPorPagarController {
     return this.service.findOne(terceroId, usuario.empresa_id);
   }
 
+  @Post('credito')
+  crearCredito(
+    @Body() dto: CreateCreditoProveedorDto,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.service.crearCredito(dto, usuario.empresa_id, usuario.name);
+  }
+
   @Post('pago')
   pagar(
-    @Body() dto: CreatePagoDto,
+    @Body() dto: RegistrarPagoDto,
     @CurrentUser() usuario: any,
   ) {
     return this.service.pagar(dto, usuario.empresa_id, usuario.name);
+  }
+
+  @Post('posfechar')
+  posfechar(
+    @Body() dto: PosfecharPagoDto,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.service.posfecharCuota(dto, usuario.empresa_id);
   }
 }

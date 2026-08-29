@@ -44,4 +44,12 @@ export class PurchasesController {
   ) {
     return this.purchasesService.findOne(id, usuario.empresa_id);
   }
+
+  @Post(':id/anular')
+  anular(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.purchasesService.anular(id, usuario.empresa_id, usuario.email);
+  }
 }

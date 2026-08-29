@@ -28,6 +28,11 @@ export class ProductsService {
         'El código de producto ya existe en esta empresa',
       );
     }
+    // Calcular pvp4 automáticamente si no se envía: pvp1 + IVA
+    if (dto.pvp4 === undefined || dto.pvp4 === null) {
+      const iva = Number(dto.impuesto || 19);
+      dto.pvp4 = Math.round(Number(dto.pvp1 || 0) * (1 + iva / 100) * 100) / 100;
+    }
     const producto = this.repo.create({ ...dto, empresa_id: empresaId });
     return this.repo.save(producto);
   }
@@ -61,6 +66,12 @@ export class ProductsService {
           'El código de producto ya existe en esta empresa',
         );
       }
+    }
+    // Recalcular pvp4 si se actualiza pvp1 o impuesto pero no pvp4
+    if ((dto.pvp1 !== undefined || dto.impuesto !== undefined) && dto.pvp4 === undefined) {
+      const pvp1 = Number(dto.pvp1 ?? producto.pvp1);
+      const iva = Number(dto.impuesto ?? producto.impuesto ?? 19);
+      dto.pvp4 = Math.round(pvp1 * (1 + iva / 100) * 100) / 100;
     }
     Object.assign(producto, dto);
     return this.repo.save(producto);

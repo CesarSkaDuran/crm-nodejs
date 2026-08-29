@@ -11,10 +11,10 @@ import {
 import { TipoNaturaleza, TipoTercero } from '../entities/third.entity';
 
 export class CreateThirdDto {
-  @ApiProperty({ example: 'CL0001' })
+  @ApiPropertyOptional({ example: 'CL0001' })
   @IsString()
-  @IsNotEmpty()
-  codigo: string;
+  @IsOptional()
+  codigo?: string;
 
   @ApiProperty({
     example: TipoTercero.CLIENTE,

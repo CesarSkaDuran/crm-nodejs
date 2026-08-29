@@ -36,6 +36,24 @@ export class CategoriasController {
     return this.categoriasService.findAll(usuario.empresa_id);
   }
 
+  @Get('tree')
+  findTree(@CurrentUser() usuario: any) {
+    return this.categoriasService.findTree(usuario.empresa_id);
+  }
+
+  @Get('raices')
+  findRaices(@CurrentUser() usuario: any) {
+    return this.categoriasService.findRaices(usuario.empresa_id);
+  }
+
+  @Get(':id/hijos')
+  findHijos(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.categoriasService.findHijos(id, usuario.empresa_id);
+  }
+
   @Get(':id')
   findOne(
     @Param('id', ParseIntPipe) id: number,

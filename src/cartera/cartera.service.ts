@@ -1,16 +1,23 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, LessThanOrEqual, Not, In } from 'typeorm';
 import { Third } from '../thirds/entities/third.entity';
 import { AccountingEntryLine, AccountingEntry } from '../accounting/entities/accounting-entry.entity';
 import { Account } from '../accounts/entities/account.entity';
 import { Banco } from '../bancos/entities/banco.entity';
 import { Company } from '../companies/entities/company.entity';
-import { AccountingService } from '../accounting/accounting.service';
-import { TipoComprobantesService } from '../tipo-comprobantes/tipo-comprobantes.service';
-import { BancosService } from '../bancos/bancos.service';
-import { CreateCobroDto } from './dto/create-cobro.dto';
+import { Credito, TipoCredito, PeriodoCredito, EstadoCredito } from './entities/credito.entity';
+import { CuotaCredito, EstadoCuota } from './entities/cuota-credito.entity';
+import { CreateCreditoDto } from './dto/create-credito.dto';
+import { RegistrarCobroDto } from './dto/registrar-cobro.dto';
+import { PosfecharCuotaDto } from './dto/posfechar-cuota.dto';
 import { resolveBancoCuenta, round2, assertBalanced } from '../accounting/accounting-helpers';
+
+const DIAS_POR_PERIODO: Record<number, number> = {
+  [PeriodoCredito.SEMANAL]: 7,
+  [PeriodoCredito.QUINCENAL]: 15,
+  [PeriodoCredito.MENSUAL]: 30,
+};
 
 @Injectable()
 export class CarteraService {
@@ -21,54 +28,96 @@ export class CarteraService {
     private readonly lineRepo: Repository<AccountingEntryLine>,
     @InjectRepository(Account)
     private readonly accountRepo: Repository<Account>,
+    @InjectRepository(Credito)
+    private readonly creditoRepo: Repository<Credito>,
+    @InjectRepository(CuotaCredito)
+    private readonly cuotaRepo: Repository<CuotaCredito>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
-    private readonly accountingService: AccountingService,
-    private readonly tipoCompService: TipoComprobantesService,
-    private readonly bancosService: BancosService,
   ) {}
+
+  // ============ LISTADO DE CARTERA (resumen por tercero) ============
 
   async findAll(query: any, empresaId: number) {
     const page = Math.max(1, Number(query.page || 1));
     const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
 
-    const [clientes, total] = await this.thirdRepo.findAndCount({
-      where: { empresa_id: empresaId, tipo_terceros: 1, estado: 1 },
-      order: { nombre: 'ASC' },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
+    const qb = this.creditoRepo
+      .createQueryBuilder('cr')
+      .leftJoinAndSelect('cr.tercero', 't')
+      .where('cr.empresa_id = :empresaId', { empresaId })
+      .andWhere('cr.tipo_credito IN (:...tipos)', {
+        tipos: [TipoCredito.VENTA, TipoCredito.MANUAL],
+      })
+      .andWhere('cr.estado != :anulado', { anulado: EstadoCredito.ANULADO });
 
-    const data = [];
-    for (const t of clientes) {
-      const res = await this.lineRepo
-        .createQueryBuilder('c')
-        .select('COALESCE(SUM(c.debito), 0)', 'debito')
-        .addSelect('COALESCE(SUM(c.credito), 0)', 'credito')
-        .where('c.empresa_id = :empresaId AND c.tercero_id = :terceroId', {
-          empresaId,
-          terceroId: t.id,
-        })
-        .getRawOne();
+    if (query.solo_saldo_positivo) {
+      qb.andWhere('cr.saldo > 0');
+    }
 
-      const debito = Number(res?.debito ?? 0);
-      const credito = Number(res?.credito ?? 0);
-      const saldo = debito - credito;
+    if (query.tercero_id) {
+      qb.andWhere('cr.tercero_id = :terceroId', { terceroId: query.tercero_id });
+    }
 
-      if (!query.solo_saldo_positivo || saldo > 0) {
-        data.push({
-          tercero_id: t.id,
-          nombre: t.nombre,
-          documento: t.documento,
-          total_debito: debito,
-          total_credito: credito,
-          saldo,
+    qb.orderBy('t.nombre', 'ASC').skip((page - 1) * limit).take(limit);
+
+    const [creditos, total] = await qb.getManyAndCount();
+
+    // Agrupar por tercero
+    const mapa = new Map<number, any>();
+    for (const cr of creditos) {
+      const tid = cr.tercero_id;
+      if (!mapa.has(tid)) {
+        mapa.set(tid, {
+          tercero_id: tid,
+          nombre: cr.tercero?.nombre || '',
+          documento: cr.tercero?.documento || '',
+          cupo: Number(cr.tercero?.cupo || 0),
+          creditos: [],
+          saldo_total: 0,
+          cuotas_vencidas: 0,
+          dias_mora_max: 0,
         });
+      }
+      const entry = mapa.get(tid);
+      entry.creditos.push({
+        id: cr.id,
+        documento_origen: cr.documento_origen,
+        fecha: cr.fecha,
+        monto_total: Number(cr.monto_total),
+        saldo: Number(cr.saldo),
+        cuotas_pagadas: cr.cuotas_pagadas,
+        numero_cuotas: cr.numero_cuotas,
+        periodo: cr.periodo,
+        estado: cr.estado,
+      });
+      entry.saldo_total = round2(entry.saldo_total + Number(cr.saldo));
+    }
+
+    // Calcular mora y cuotas vencidas por tercero
+    const hoy = new Date().toISOString().split('T')[0];
+    for (const entry of mapa.values()) {
+      const cuotas = await this.cuotaRepo.find({
+        where: {
+          empresa_id: empresaId,
+          credito_id: entry.creditos.map((c: any) => c.id),
+          estado: Not(EstadoCuota.PAGADA),
+          fecha_pago_oportuno: LessThanOrEqual(hoy),
+        },
+      });
+      entry.cuotas_vencidas = cuotas.length;
+      for (const cq of cuotas) {
+        const dias = this.calcularDiasMora(cq.fecha_pago_oportuno, cq.fecha_posfechada);
+        if (dias > entry.dias_mora_max) entry.dias_mora_max = dias;
       }
     }
 
-    return { data, total: clientes.length, page, limit };
+    const data = Array.from(mapa.values());
+
+    return { data, total, page, limit };
   }
+
+  // ============ DETALLE DE UN TERCERO (todos sus créditos y cuotas) ============
 
   async findOne(terceroId: number, empresaId: number) {
     const cliente = await this.thirdRepo.findOne({
@@ -78,16 +127,19 @@ export class CarteraService {
       throw new NotFoundException('Cliente no encontrado');
     }
 
-    const res = await this.lineRepo
-      .createQueryBuilder('c')
-      .select('COALESCE(SUM(c.debito), 0)', 'debito')
-      .addSelect('COALESCE(SUM(c.credito), 0)', 'credito')
-      .where('c.empresa_id = :empresaId AND c.tercero_id = :terceroId', {
-        empresaId,
-        terceroId,
-      })
-      .getRawOne();
+    const creditos = await this.creditoRepo.find({
+      where: {
+        empresa_id: empresaId,
+        tercero_id: terceroId,
+        tipo_credito: In([TipoCredito.VENTA, TipoCredito.MANUAL]),
+      },
+      relations: ['cuotas'],
+      order: { fecha: 'DESC' },
+    });
 
+    const saldoTotal = creditos.reduce((acc, c) => acc + Number(c.saldo), 0);
+
+    // Movimientos contables del tercero
     const movimientos = await this.lineRepo.find({
       where: { empresa_id: empresaId, tercero_id: terceroId },
       relations: ['cuenta_contable', 'asentado'],
@@ -97,16 +149,220 @@ export class CarteraService {
     return {
       tercero: cliente,
       resumen: {
-        total_debito: Number(res?.debito ?? 0),
-        total_credito: Number(res?.credito ?? 0),
-        saldo: Number(res?.debito ?? 0) - Number(res?.credito ?? 0),
+        saldo_total: round2(saldoTotal),
+        creditos_activos: creditos.filter((c) => c.estado === EstadoCredito.ACTIVO).length,
+        cupo: Number(cliente.cupo),
+        cupo_disponible: round2(Number(cliente.cupo) - saldoTotal),
       },
+      creditos: creditos.map((c) => ({
+        ...c,
+        cuotas: c.cuotas?.sort((a, b) => a.numero_cuota - b.numero_cuota),
+      })),
       movimientos,
     };
   }
 
-  async cobrar(dto: CreateCobroDto, empresaId: number, usuario: string) {
+  // ============ DETALLE DE UN CRÉDITO ESPECÍFICO ============
+
+  async findCredito(creditoId: number, empresaId: number) {
+    const credito = await this.creditoRepo.findOne({
+      where: { id: creditoId, empresa_id: empresaId },
+      relations: ['tercero', 'cuotas'],
+    });
+    if (!credito) {
+      throw new NotFoundException('Crédito no encontrado');
+    }
+
+    const cuotas = (credito.cuotas || []).sort((a, b) => a.numero_cuota - b.numero_cuota);
+    const hoy = new Date().toISOString().split('T')[0];
+
+    const cuotasConMora = cuotas.map((cq) => {
+      const dias_mora = cq.estado !== EstadoCuota.PAGADA
+        ? this.calcularDiasMora(cq.fecha_pago_oportuno, cq.fecha_posfechada)
+        : 0;
+      const interes_mora = dias_mora > 0 && Number(credito.tasa_mora) > 0
+        ? round2(Number(cq.saldo) * (Number(credito.tasa_mora) / 100) * (dias_mora / 30))
+        : 0;
+      return {
+        ...cq,
+        dias_mora,
+        interes_mora,
+        total_pagar: round2(Number(cq.saldo) + interes_mora),
+        vencida: cq.estado !== EstadoCuota.PAGADA && cq.fecha_pago_oportuno <= hoy,
+      };
+    });
+
+    return {
+      ...credito,
+      cuotas: cuotasConMora,
+      pago_minimo: this.calcularPagoMinimo(credito),
+    };
+  }
+
+  // ============ CREAR CRÉDITO MANUAL ============
+
+  async crearCredito(dto: CreateCreditoDto, empresaId: number, usuario: string) {
+    const tercero = await this.thirdRepo.findOne({
+      where: { id: dto.tercero_id, empresa_id: empresaId, tipo_terceros: 1 },
+    });
+    if (!tercero) {
+      throw new NotFoundException('Cliente no encontrado');
+    }
+    if (!tercero.cuenta_contable_id) {
+      throw new BadRequestException(
+        `El cliente ${tercero.nombre} no tiene cuenta contable asignada en el Plan Único de Cuentas`,
+      );
+    }
+
+    // Validar cupo
+    const saldoActual = await this.obtenerSaldoTercero(dto.tercero_id, empresaId);
+    if (Number(tercero.cupo) > 0 && round2(saldoActual + dto.monto_total) > Number(tercero.cupo)) {
+      throw new BadRequestException(
+        `El monto excede el cupo del cliente. Cupo: ${tercero.cupo}, Saldo actual: ${saldoActual}, Disponible: ${round2(Number(tercero.cupo) - saldoActual)}`,
+      );
+    }
+
     return this.dataSource.transaction(async (manager) => {
+      const creditoRepo = manager.getRepository(Credito);
+      const cuotaRepo = manager.getRepository(CuotaCredito);
+      const accountRepo = manager.getRepository(Account);
+      const asentadoRepo = manager.getRepository(AccountingEntry);
+      const contabilidadRepo = manager.getRepository(AccountingEntryLine);
+      const empresaRepo = manager.getRepository(Company);
+
+      const valorCuota = round2(dto.monto_total / dto.numero_cuotas);
+      const dias = DIAS_POR_PERIODO[dto.periodo] || 30;
+
+      const credito = creditoRepo.create({
+        empresa_id: empresaId,
+        tercero_id: dto.tercero_id,
+        tipo_credito: TipoCredito.MANUAL,
+        fecha: dto.fecha,
+        monto_total: round2(dto.monto_total),
+        saldo: round2(dto.monto_total),
+        valor_cuota: valorCuota,
+        numero_cuotas: dto.numero_cuotas,
+        cuotas_pagadas: 0,
+        periodo: dto.periodo,
+        mora: 0,
+        tasa_mora: dto.tasa_mora || 0,
+        estado: EstadoCredito.ACTIVO,
+        observacion: dto.observacion,
+      });
+      const creditoGuardado = await creditoRepo.save(credito);
+
+      // Generar cuotas
+      const cuotas: CuotaCredito[] = [];
+      const fechaBase = new Date(dto.fecha);
+      for (let i = 1; i <= dto.numero_cuotas; i++) {
+        const fechaOportuna = new Date(fechaBase);
+        if (dto.periodo === PeriodoCredito.MENSUAL) {
+          fechaOportuna.setMonth(fechaOportuna.getMonth() + i);
+        } else {
+          fechaOportuna.setDate(fechaOportuna.getDate() + dias * i);
+        }
+
+        cuotas.push(
+          cuotaRepo.create({
+            empresa_id: empresaId,
+            credito_id: creditoGuardado.id,
+            numero_cuota: i,
+            valor: valorCuota,
+            abonado: 0,
+            saldo: valorCuota,
+            fecha_pago_oportuno: fechaOportuna.toISOString().split('T')[0],
+            estado: EstadoCuota.PENDIENTE,
+          }),
+        );
+      }
+      await cuotaRepo.save(cuotas);
+
+      // Crear asiento contable: débito a cuenta por cobrar del cliente
+      const clienteCuenta = await accountRepo.findOne({
+        where: { id: tercero.cuenta_contable_id, empresa_id: empresaId },
+      });
+      if (!clienteCuenta) {
+        throw new BadRequestException('La cuenta contable del cliente no existe');
+      }
+
+      // Buscar cuenta de contrapartida (egreso/banco/caja general)
+      const contrapartida = await this.buscarCuentaContrapartidaCredito(accountRepo, empresaId);
+      if (!contrapartida) {
+        throw new BadRequestException(
+          'No se encontró una cuenta de banco/caja general para registrar el crédito manual. Configure una cuenta con código 11xx.',
+        );
+      }
+
+      const empresa = await empresaRepo.findOneBy({ id: empresaId });
+      if (!empresa) throw new NotFoundException('Empresa no encontrada');
+      empresa.consecutivo_asientos = (empresa.consecutivo_asientos || 0) + 1;
+      await empresaRepo.save(empresa);
+
+      const consecutivo = 'CR' + empresa.consecutivo_asientos.toString().padStart(6, '0');
+      const monto = round2(dto.monto_total);
+
+      const asentado = asentadoRepo.create({
+        empresa_id: empresaId,
+        consecutivo,
+        tipo: 4, // ingreso
+        fecha: dto.fecha,
+        descripcion: dto.observacion || `Crédito manual a ${tercero.nombre}`,
+        total_debito: monto,
+        total_credito: monto,
+        usuario,
+        estado: 1,
+      });
+      const asentadoGuardado = await asentadoRepo.save(asentado);
+
+      const lineas: Partial<AccountingEntryLine>[] = [
+        {
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
+          cuenta_contable_id: clienteCuenta.id,
+          tercero_id: tercero.id,
+          descripcion: `Crédito a ${tercero.nombre}`,
+          valor: monto,
+          debito: monto,
+          credito: 0,
+          naturaleza: 'D',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        },
+        {
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
+          cuenta_contable_id: contrapartida.id,
+          tercero_id: tercero.id,
+          descripcion: `Contrapartida crédito ${tercero.nombre}`,
+          valor: monto,
+          debito: 0,
+          credito: monto,
+          naturaleza: 'C',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        },
+      ];
+
+      const balance = assertBalanced(lineas.map((l) => ({ debito: Number(l.debito || 0), credito: Number(l.credito || 0) })));
+      asentadoGuardado.total_debito = balance.debito;
+      asentadoGuardado.total_credito = balance.credito;
+      await asentadoRepo.save(asentadoGuardado);
+      await contabilidadRepo.save(lineas.map((l) => contabilidadRepo.create(l)));
+
+      return this.findCredito(creditoGuardado.id, empresaId);
+    });
+  }
+
+  // ============ REGISTRAR COBRO ============
+
+  async cobrar(dto: RegistrarCobroDto, empresaId: number, usuario: string) {
+    return this.dataSource.transaction(async (manager) => {
+      const creditoRepo = manager.getRepository(Credito);
+      const cuotaRepo = manager.getRepository(CuotaCredito);
       const thirdRepo = manager.getRepository(Third);
       const accountRepo = manager.getRepository(Account);
       const bancoRepo = manager.getRepository(Banco);
@@ -114,23 +370,25 @@ export class CarteraService {
       const asentadoRepo = manager.getRepository(AccountingEntry);
       const contabilidadRepo = manager.getRepository(AccountingEntryLine);
 
-      const cliente = await thirdRepo.findOne({
-        where: { id: dto.tercero_id, empresa_id: empresaId },
+      const credito = await creditoRepo.findOne({
+        where: { id: dto.credito_id, empresa_id: empresaId },
+        relations: ['tercero'],
       });
-      if (!cliente) {
-        throw new NotFoundException('Cliente no encontrado');
+      if (!credito) {
+        throw new NotFoundException('Crédito no encontrado');
       }
+      if (credito.estado === EstadoCredito.ANULADO) {
+        throw new BadRequestException('El crédito está anulado');
+      }
+      if (Number(credito.saldo) <= 0) {
+        throw new BadRequestException('El crédito no tiene saldo pendiente');
+      }
+
+      const cliente = credito.tercero;
       if (!cliente.cuenta_contable_id) {
         throw new BadRequestException(
           `El cliente ${cliente.nombre} no tiene cuenta contable asignada`,
         );
-      }
-
-      const clienteCuenta = await accountRepo.findOne({
-        where: { id: cliente.cuenta_contable_id, empresa_id: empresaId },
-      });
-      if (!clienteCuenta) {
-        throw new BadRequestException('La cuenta contable del cliente no existe');
       }
 
       const banco = await bancoRepo.findOne({
@@ -152,22 +410,76 @@ export class CarteraService {
         throw new BadRequestException('El valor del cobro debe ser mayor a cero');
       }
 
-      // Sumar al banco dentro de la misma transacción
-      banco.monto = round2(Number(banco.monto) + monto);
+      const pagarTodo = dto.pagar_todo || monto >= Number(credito.saldo);
+      const montoAplicar = pagarTodo ? round2(Number(credito.saldo)) : monto;
+
+      // Obtener cuotas pendientes ordenadas
+      let cuotas = await cuotaRepo.find({
+        where: { credito_id: credito.id, estado: Not(EstadoCuota.PAGADA) },
+        order: { numero_cuota: 'ASC' },
+      });
+
+      if (dto.cuota_id) {
+        cuotas = cuotas.filter((c) => c.id === dto.cuota_id);
+        if (cuotas.length === 0) {
+          throw new BadRequestException('La cuota especificada no existe o ya está pagada');
+        }
+      }
+
+      if (cuotas.length === 0) {
+        throw new BadRequestException('No hay cuotas pendientes en este crédito');
+      }
+
+      // Distribuir el pago entre las cuotas
+      let restante = montoAplicar;
+      const cuotasActualizadas: CuotaCredito[] = [];
+
+      for (const cuota of cuotas) {
+        if (restante <= 0) break;
+
+        const saldoCuota = round2(Number(cuota.saldo));
+        const aplicar = Math.min(restante, saldoCuota);
+        const nuevoAbonado = round2(Number(cuota.abonado) + aplicar);
+        const nuevoSaldo = round2(saldoCuota - aplicar);
+
+        cuota.abonado = nuevoAbonado;
+        cuota.saldo = nuevoSaldo;
+        cuota.fecha_pago_efectivo = dto.fecha;
+        cuota.banco_id = dto.banco_id;
+        cuota.estado = nuevoSaldo <= 0 ? EstadoCuota.PAGADA : EstadoCuota.PARCIAL;
+
+        cuotasActualizadas.push(cuota);
+        restante = round2(restante - aplicar);
+      }
+
+      await cuotaRepo.save(cuotasActualizadas);
+
+      // Actualizar crédito
+      credito.saldo = round2(Number(credito.saldo) - montoAplicar);
+      credito.fecha_ultimo_pago = dto.fecha;
+      const cuotasPagadasTotal = await cuotaRepo.count({
+        where: { credito_id: credito.id, estado: EstadoCuota.PAGADA },
+      });
+      credito.cuotas_pagadas = cuotasPagadasTotal;
+
+      if (credito.saldo <= 0.01) {
+        credito.estado = EstadoCredito.PAGADO;
+        credito.saldo = 0;
+      }
+      await creditoRepo.save(credito);
+
+      // Actualizar banco
+      banco.monto = round2(Number(banco.monto) + montoAplicar);
       await bancoRepo.save(banco);
 
-      // Generar consecutivo dentro de la transacción
+      // Crear asiento contable
       const empresa = await empresaRepo.findOneBy({ id: empresaId });
-      if (!empresa) {
-        throw new NotFoundException('Empresa no encontrada');
-      }
+      if (!empresa) throw new NotFoundException('Empresa no encontrada');
       empresa.consecutivo_asientos = (empresa.consecutivo_asientos || 0) + 1;
       await empresaRepo.save(empresa);
 
-      const consecutivo =
-        'CB' + empresa.consecutivo_asientos.toString().padStart(6, '0');
-
-      const descripcion = dto.descripcion ?? `Cobro a cliente ${cliente.nombre}`;
+      const consecutivo = 'CB' + empresa.consecutivo_asientos.toString().padStart(6, '0');
+      const descripcion = dto.descripcion || `Cobro a ${cliente.nombre} - Crédito #${credito.id}`;
 
       const asentado = asentadoRepo.create({
         empresa_id: empresaId,
@@ -175,8 +487,8 @@ export class CarteraService {
         tipo: dto.tipo_comprobante_id,
         fecha: dto.fecha,
         descripcion,
-        total_debito: monto,
-        total_credito: monto,
+        total_debito: montoAplicar,
+        total_credito: montoAplicar,
         usuario,
         estado: 1,
       });
@@ -189,8 +501,8 @@ export class CarteraService {
           cuenta_contable_id: bancoCuenta.id,
           tercero_id: cliente.id,
           descripcion: `Entrada banco/caja cobro a ${cliente.nombre}`,
-          valor: monto,
-          debito: monto,
+          valor: montoAplicar,
+          debito: montoAplicar,
           credito: 0,
           naturaleza: 'D',
           consecutivo,
@@ -204,9 +516,9 @@ export class CarteraService {
           cuenta_contable_id: cliente.cuenta_contable_id,
           tercero_id: cliente.id,
           descripcion: `Cobro a ${cliente.nombre}`,
-          valor: monto,
+          valor: montoAplicar,
           debito: 0,
-          credito: monto,
+          credito: montoAplicar,
           naturaleza: 'C',
           consecutivo,
           fecha: dto.fecha,
@@ -215,23 +527,227 @@ export class CarteraService {
         },
       ];
 
-      // Validar balance
-      const balance = assertBalanced(
-        lineas.map((l) => ({
-          debito: Number(l.debito || 0),
-          credito: Number(l.credito || 0),
-        })),
-      );
-
+      const balance = assertBalanced(lineas.map((l) => ({ debito: Number(l.debito || 0), credito: Number(l.credito || 0) })));
       asentadoGuardado.total_debito = balance.debito;
       asentadoGuardado.total_credito = balance.credito;
       await asentadoRepo.save(asentadoGuardado);
+      await contabilidadRepo.save(lineas.map((l) => contabilidadRepo.create(l)));
 
-      await contabilidadRepo.save(
-        lineas.map((l) => contabilidadRepo.create(l)),
-      );
+      // Vincular asentado a las cuotas pagadas
+      for (const cq of cuotasActualizadas) {
+        if (cq.estado === EstadoCuota.PAGADA && !cq.asentado_id) {
+          cq.asentado_id = asentadoGuardado.id;
+          cq.numero_recibo = consecutivo;
+          await cuotaRepo.save(cq);
+        }
+      }
 
-      return asentadoGuardado;
+      return {
+        asentado: asentadoGuardado,
+        credito: { id: credito.id, saldo: credito.saldo, estado: credito.estado },
+        cuotas_pagadas: cuotasActualizadas.filter((c) => c.estado === EstadoCuota.PAGADA).length,
+        monto_aplicado: montoAplicar,
+      };
     });
+  }
+
+  // ============ POSFECHAR CUOTA ============
+
+  async posfecharCuota(dto: PosfecharCuotaDto, empresaId: number) {
+    const cuota = await this.cuotaRepo.findOne({
+      where: { id: dto.cuota_id, empresa_id: empresaId },
+      relations: ['credito'],
+    });
+    if (!cuota) {
+      throw new NotFoundException('Cuota no encontrada');
+    }
+    if (cuota.estado === EstadoCuota.PAGADA) {
+      throw new BadRequestException('No se puede posfechar una cuota ya pagada');
+    }
+
+    cuota.fecha_posfechada = dto.fecha_posfechada;
+    if (dto.observacion) {
+      cuota.observacion = dto.observacion;
+    }
+    await this.cuotaRepo.save(cuota);
+
+    return { ok: true, cuota };
+  }
+
+  // ============ CUOTAS VENCIDAS ============
+
+  async cuotasVencidas(empresaId: number, query?: any) {
+    const hoy = new Date().toISOString().split('T')[0];
+
+    const qb = this.cuotaRepo
+      .createQueryBuilder('cq')
+      .leftJoinAndSelect('cq.credito', 'cr')
+      .leftJoinAndSelect('cr.tercero', 't')
+      .where('cq.empresa_id = :empresaId', { empresaId })
+      .andWhere('cq.estado != :pagada', { pagada: EstadoCuota.PAGADA })
+      .andWhere('cr.tipo_credito IN (:...tipos)', { tipos: [TipoCredito.VENTA, TipoCredito.MANUAL] })
+      .andWhere('cr.estado != :anulado', { anulado: EstadoCredito.ANULADO });
+
+    if (query?.incluir_posfechadas) {
+      qb.andWhere(
+        '(cq.fecha_pago_oportuno <= :hoy OR (cq.fecha_posfechada IS NOT NULL AND cq.fecha_posfechada <= :hoy))',
+        { hoy },
+      );
+    } else {
+      qb.andWhere('cq.fecha_pago_oportuno <= :hoy', { hoy });
+      qb.andWhere('(cq.fecha_posfechada IS NULL OR cq.fecha_posfechada > :hoy)', { hoy });
+    }
+
+    if (query?.tercero_id) {
+      qb.andWhere('cr.tercero_id = :terceroId', { terceroId: query.tercero_id });
+    }
+
+    const cuotas = await qb.orderBy('cq.fecha_pago_oportuno', 'ASC').getMany();
+
+    const data = cuotas.map((cq) => {
+      const diasMora = this.calcularDiasMora(cq.fecha_pago_oportuno, cq.fecha_posfechada);
+      const interesMora =
+        diasMora > 0 && Number(cq.credito.tasa_mora) > 0
+          ? round2(Number(cq.saldo) * (Number(cq.credito.tasa_mora) / 100) * (diasMora / 30))
+          : 0;
+
+      return {
+        cuota_id: cq.id,
+        credito_id: cq.credito_id,
+        numero_cuota: cq.numero_cuota,
+        tercero_id: cq.credito.tercero_id,
+        nombre: cq.credito.tercero?.nombre || '',
+        documento: cq.credito.tercero?.documento || '',
+        valor: Number(cq.valor),
+        saldo: Number(cq.saldo),
+        fecha_pago_oportuno: cq.fecha_pago_oportuno,
+        fecha_posfechada: cq.fecha_posfechada,
+        dias_mora: diasMora,
+        interes_mora: interesMora,
+        total_pagar: round2(Number(cq.saldo) + interesMora),
+        estado: cq.estado,
+      };
+    });
+
+    const totalVencido = data.reduce((acc, d) => acc + d.total_pagar, 0);
+
+    return { data, total_vencido: round2(totalVencido), count: data.length };
+  }
+
+  // ============ MÉTODO INTERNO: Crear crédito desde venta/compra ============
+
+  async crearCreditoDesdeDocumento(
+    empresaId: number,
+    terceroId: number,
+    tipoCredito: TipoCredito,
+    documentoOrigen: string,
+    fecha: string,
+    monto: number,
+    numeroCuotas: number,
+    periodo: PeriodoCredito,
+    tasaMora: number,
+    manager: any,
+  ): Promise<Credito> {
+    const creditoRepo = manager.getRepository(Credito);
+    const cuotaRepo = manager.getRepository(CuotaCredito);
+
+    const valorCuota = round2(monto / numeroCuotas);
+    const dias = DIAS_POR_PERIODO[periodo] || 30;
+
+    const credito = creditoRepo.create({
+      empresa_id: empresaId,
+      tercero_id: terceroId,
+      documento_origen: documentoOrigen,
+      tipo_credito: tipoCredito,
+      fecha,
+      monto_total: round2(monto),
+      saldo: round2(monto),
+      valor_cuota: valorCuota,
+      numero_cuotas: numeroCuotas,
+      cuotas_pagadas: 0,
+      periodo,
+      mora: 0,
+      tasa_mora: tasaMora || 0,
+      estado: EstadoCredito.ACTIVO,
+    });
+    const creditoGuardado = await creditoRepo.save(credito);
+
+    const cuotas: CuotaCredito[] = [];
+    const fechaBase = new Date(fecha);
+    for (let i = 1; i <= numeroCuotas; i++) {
+      const fechaOportuna = new Date(fechaBase);
+      if (periodo === PeriodoCredito.MENSUAL) {
+        fechaOportuna.setMonth(fechaOportuna.getMonth() + i);
+      } else {
+        fechaOportuna.setDate(fechaOportuna.getDate() + dias * i);
+      }
+
+      cuotas.push(
+        cuotaRepo.create({
+          empresa_id: empresaId,
+          credito_id: creditoGuardado.id,
+          numero_cuota: i,
+          valor: valorCuota,
+          abonado: 0,
+          saldo: valorCuota,
+          fecha_pago_oportuno: fechaOportuna.toISOString().split('T')[0],
+          estado: EstadoCuota.PENDIENTE,
+        }),
+      );
+    }
+    await cuotaRepo.save(cuotas);
+
+    return creditoGuardado;
+  }
+
+  // ============ HELPERS ============
+
+  private calcularDiasMora(fechaOportuna: string, fechaPosfechada?: string | null): number {
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+
+    const referencia = fechaPosfechada ? new Date(fechaPosfechada) : new Date(fechaOportuna);
+    referencia.setHours(0, 0, 0, 0);
+
+    if (hoy <= referencia) return 0;
+
+    const diff = hoy.getTime() - referencia.getTime();
+    return Math.floor(diff / (1000 * 60 * 60 * 24));
+  }
+
+  private calcularPagoMinimo(credito: Credito): number {
+    const dias = DIAS_POR_PERIODO[credito.periodo] || 30;
+    const div = Math.floor(Number(credito.mora) / dias) + 1;
+    const pago = div * Number(credito.valor_cuota);
+    return Math.min(round2(pago), round2(Number(credito.saldo)));
+  }
+
+  private async obtenerSaldoTercero(terceroId: number, empresaId: number): Promise<number> {
+    const res = await this.creditoRepo
+      .createQueryBuilder('cr')
+      .select('COALESCE(SUM(cr.saldo), 0)', 'total')
+      .where('cr.empresa_id = :empresaId', { empresaId })
+      .andWhere('cr.tercero_id = :terceroId', { terceroId })
+      .andWhere('cr.estado = :activo', { activo: EstadoCredito.ACTIVO })
+      .andWhere('cr.tipo_credito IN (:...tipos)', { tipos: [TipoCredito.VENTA, TipoCredito.MANUAL] })
+      .getRawOne();
+    return Number(res?.total ?? 0);
+  }
+
+  private async buscarCuentaContrapartidaCredito(
+    accountRepo: Repository<Account>,
+    empresaId: number,
+  ): Promise<Account | null> {
+    const cuentas = await accountRepo.find({
+      where: { empresa_id: empresaId, estado: 1 },
+    });
+    // Buscar cuenta de banco/caja general (códigos 11xx en PUC colombiano)
+    return (
+      cuentas.find((c) => (c.codigo || '').startsWith('1105') && (c.nombre || '').toLowerCase().includes('general')) ||
+      cuentas.find((c) => (c.codigo || '').startsWith('1110')) ||
+      cuentas.find((c) => (c.codigo || '').startsWith('1105')) ||
+      cuentas.find((c) => (c.codigo || '').startsWith('11')) ||
+      null
+    );
   }
 }

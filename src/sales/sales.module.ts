@@ -4,9 +4,10 @@ import { SalesController } from './sales.controller';
 import { SalesService } from './sales.service';
 import { Sale } from './entities/sale.entity';
 import { SaleDetail } from './entities/sale-detail.entity';
+import { CarteraModule } from '../cartera/cartera.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Sale, SaleDetail])],
+  imports: [TypeOrmModule.forFeature([Sale, SaleDetail]), CarteraModule],
   controllers: [SalesController],
   providers: [SalesService],
   exports: [SalesService],

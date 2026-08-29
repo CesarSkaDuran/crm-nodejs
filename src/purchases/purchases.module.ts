@@ -6,9 +6,13 @@ import { Purchase } from './entities/purchase.entity';
 import { PurchaseDetail } from './entities/purchase-detail.entity';
 import { Banco } from '../bancos/entities/banco.entity';
 import { Account } from '../accounts/entities/account.entity';
+import { CuentasPorPagarModule } from '../cuentas-por-pagar/cuentas-por-pagar.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Purchase, PurchaseDetail, Banco, Account])],
+  imports: [
+    TypeOrmModule.forFeature([Purchase, PurchaseDetail, Banco, Account]),
+    CuentasPorPagarModule,
+  ],
   controllers: [PurchasesController],
   providers: [PurchasesService],
   exports: [PurchasesService],

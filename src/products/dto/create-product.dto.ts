@@ -49,6 +49,12 @@ export class CreateProductDto {
   @IsOptional()
   categoria?: string;
 
+  @ApiPropertyOptional({ example: 5, description: 'ID de la categoría (subgrupo) en la tabla categorias' })
+  @IsInt()
+  @IsOptional()
+  @Type(() => Number)
+  categoria_id?: number;
+
   @ApiPropertyOptional({ example: 'Relojes hombre' })
   @IsString()
   @IsOptional()
@@ -89,6 +95,24 @@ export class CreateProductDto {
   @IsOptional()
   @Type(() => Number)
   pvp3?: number;
+
+  @ApiPropertyOptional({ example: 142800, description: 'PVP4 = pvp1 + IVA. Se calcula automáticamente si se omite.' })
+  @IsNumber()
+  @IsOptional()
+  @Type(() => Number)
+  pvp4?: number;
+
+  @ApiPropertyOptional({ example: 100000 })
+  @IsNumber()
+  @IsOptional()
+  @Type(() => Number)
+  pvp5?: number;
+
+  @ApiPropertyOptional({ example: 0, description: 'Costo + flete prorrateado (lo calcula el sistema al comprar)' })
+  @IsNumber()
+  @IsOptional()
+  @Type(() => Number)
+  costo_flete?: number;
 
   @ApiPropertyOptional({ example: 0 })
   @IsNumber()

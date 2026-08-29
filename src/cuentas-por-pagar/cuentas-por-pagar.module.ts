@@ -7,9 +7,8 @@ import { AccountingEntryLine, AccountingEntry } from '../accounting/entities/acc
 import { Account } from '../accounts/entities/account.entity';
 import { Banco } from '../bancos/entities/banco.entity';
 import { Company } from '../companies/entities/company.entity';
-import { AccountingModule } from '../accounting/accounting.module';
-import { TipoComprobantesModule } from '../tipo-comprobantes/tipo-comprobantes.module';
-import { BancosModule } from '../bancos/bancos.module';
+import { Credito } from '../cartera/entities/credito.entity';
+import { CuotaCredito } from '../cartera/entities/cuota-credito.entity';
 
 @Module({
   imports: [
@@ -20,10 +19,9 @@ import { BancosModule } from '../bancos/bancos.module';
       Account,
       Banco,
       Company,
+      Credito,
+      CuotaCredito,
     ]),
-    AccountingModule,
-    TipoComprobantesModule,
-    BancosModule,
   ],
   controllers: [CuentasPorPagarController],
   providers: [CuentasPorPagarService],

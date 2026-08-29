@@ -125,6 +125,24 @@ export class CreateSaleDto {
   @Type(() => Number)
   banco_id?: number;
 
+  @ApiPropertyOptional({ example: 1, description: 'Número de cuotas si la venta es a crédito (default: 1)' })
+  @IsInt()
+  @IsOptional()
+  @Type(() => Number)
+  numero_cuotas?: number;
+
+  @ApiPropertyOptional({ example: 3, description: 'Periodo de cuotas: 1=semanal, 2=quincenal, 3=mensual (default: 3)' })
+  @IsInt()
+  @IsOptional()
+  @Type(() => Number)
+  periodo_cuotas?: number;
+
+  @ApiPropertyOptional({ example: 0, description: 'Tasa de interés por mora (%) para el crédito' })
+  @IsNumber()
+  @IsOptional()
+  @Type(() => Number)
+  tasa_mora?: number;
+
   @ApiProperty({ type: [DetalleVentaDto] })
   @IsArray()
   @ArrayMinSize(1)

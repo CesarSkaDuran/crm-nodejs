@@ -32,9 +32,24 @@ export class ThirdsService {
     }
   }
 
+  private async generarCodigo(empresaId: number): Promise<string> {
+    const total = await this.repo.count({ where: { empresa_id: empresaId } });
+    let consecutivo = total + 1;
+    let codigo = `TER${consecutivo.toString().padStart(4, '0')}`;
+
+    while (await this.repo.findOne({ where: { codigo, empresa_id: empresaId } })) {
+      consecutivo++;
+      codigo = `TER${consecutivo.toString().padStart(4, '0')}`;
+    }
+
+    return codigo;
+  }
+
   async create(dto: CreateThirdDto, empresaId: number) {
+    const codigo = dto.codigo?.trim() || (await this.generarCodigo(empresaId));
+
     const exists = await this.repo.findOne({
-      where: { codigo: dto.codigo, empresa_id: empresaId },
+      where: { codigo, empresa_id: empresaId },
     });
     if (exists) {
       throw new ConflictException(
@@ -44,7 +59,7 @@ export class ThirdsService {
 
     await this.validarCuenta(empresaId, dto.cuenta_contable_id);
 
-    const tercero = this.repo.create({ ...dto, empresa_id: empresaId });
+    const tercero = this.repo.create({ ...dto, codigo, empresa_id: empresaId });
     return this.repo.save(tercero);
   }
 

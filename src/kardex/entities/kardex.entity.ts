@@ -71,6 +71,9 @@ export class Kardex {
   @Column('decimal', { precision: 15, scale: 4, default: 0 })
   promedio_actual: number;
 
+  @Column('decimal', { precision: 15, scale: 4, default: 0, nullable: true })
+  precio_venta: number;
+
   @Column({ type: 'tinyint', default: 1 })
   estado: number;
 

@@ -20,6 +20,9 @@ import { CarteraModule } from './cartera/cartera.module';
 import { CuentasPorPagarModule } from './cuentas-por-pagar/cuentas-por-pagar.module';
 import { InformesModule } from './informes/informes.module';
 import { CategoriasModule } from './categorias/categorias.module';
+import { InventarioFisicoModule } from './inventario-fisico/inventario-fisico.module';
+import { FacturacionElectronicaModule } from './facturacion-electronica/facturacion-electronica.module';
+import { TiposDocumentoModule } from './tipos-documento/tipos-documento.module';
 
 @Module({
   imports: [
@@ -59,6 +62,9 @@ import { CategoriasModule } from './categorias/categorias.module';
     CuentasPorPagarModule,
     InformesModule,
     CategoriasModule,
+    InventarioFisicoModule,
+    FacturacionElectronicaModule,
+    TiposDocumentoModule,
   ],
   controllers: [AppController],
   providers: [AppService],

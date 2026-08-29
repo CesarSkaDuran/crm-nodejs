@@ -15,4 +15,9 @@ export class CreateCategoriaDto {
   @ApiProperty({ example: 1, description: '1 producto, 2 servicio' })
   @IsInt()
   tipo: number;
+
+  @ApiPropertyOptional({ example: null, description: 'ID de la categoría padre. NULL = categoría raíz' })
+  @IsInt()
+  @IsOptional()
+  padre_id?: number;
 }

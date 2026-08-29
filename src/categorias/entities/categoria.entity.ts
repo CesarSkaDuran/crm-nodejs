@@ -4,6 +4,7 @@ import {
   Column,
   ManyToOne,
   JoinColumn,
+  OneToMany,
   CreateDateColumn,
   UpdateDateColumn,
   Unique,
@@ -31,6 +32,16 @@ export class Categoria {
 
   @Column({ type: 'tinyint', default: 1, comment: '1 producto, 2 servicio' })
   tipo: number;
+
+  @Column({ nullable: true, comment: 'ID de la categoría padre (NULL = es raíz)' })
+  padre_id: number;
+
+  @ManyToOne(() => Categoria, (padre) => padre.hijos, { nullable: true })
+  @JoinColumn({ name: 'padre_id' })
+  padre: Categoria;
+
+  @OneToMany('Categoria', 'padre')
+  hijos: Categoria[];
 
   @Column({ type: 'tinyint', default: 1 })
   estado: number;

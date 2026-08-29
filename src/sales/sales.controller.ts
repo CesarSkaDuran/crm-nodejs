@@ -40,4 +40,12 @@ export class SalesController {
   ) {
     return this.salesService.findOne(id, usuario.empresa_id);
   }
+
+  @Post(':id/anular')
+  anular(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.salesService.anular(id, usuario.empresa_id, usuario.email);
+  }
 }

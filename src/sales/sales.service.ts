@@ -571,12 +571,24 @@ export class SalesService {
       const cuentaRepo = manager.getRepository(Account);
       const kardexRepo = manager.getRepository(Kardex);
 
-      // 1. Devolver stock
+      // 1. Devolver stock y restaurar saldo_inventario / promedio
       const detalles = await detalleRepo.find({ where: { venta_id: id } });
       for (const det of detalles) {
         const producto = await productoRepo.findOne({ where: { id: det.producto_id } });
         if (producto) {
-          producto.stock = round2(Number(producto.stock) + Number(det.cantidad));
+          // Al venderse se restó cantidad y costo (cantidad * costo_unitario_promedio).
+          // Reversión: sumar cantidad y sumar costo al saldo.
+          const cantidadDevolver = Number(det.cantidad);
+          const costoUnitario = Number(det.costo_unitario) || Number(producto.promedio) || 0;
+          const valorDevolver = round2(cantidadDevolver * costoUnitario);
+
+          const stockActual = round2(Number(producto.stock) + cantidadDevolver);
+          const saldoActual = round2(Number(producto.saldo_inventario) + valorDevolver);
+          const promedioActual = stockActual > 0 ? round2(saldoActual / stockActual) : 0;
+
+          producto.stock = stockActual;
+          producto.saldo_inventario = saldoActual;
+          producto.promedio = promedioActual;
           await productoRepo.save(producto);
 
           // Kardex de reversión
@@ -587,18 +599,18 @@ export class SalesService {
             documento_id: venta.id,
             consecutivo: 'ANV' + venta.id,
             fecha: new Date().toISOString().split('T')[0],
-            cantidad_anterior: Number(producto.stock) - Number(det.cantidad),
-            saldo_anterior: round2((Number(producto.stock) - Number(det.cantidad)) * Number(det.precio_unitario)),
-            promedio_anterior: Number(det.precio_unitario),
-            valor_unitario: Number(det.precio_unitario),
-            entradas: Number(det.cantidad),
+            cantidad_anterior: Number(producto.stock) - cantidadDevolver,
+            saldo_anterior: round2(saldoActual - valorDevolver),
+            promedio_anterior: costoUnitario,
+            valor_unitario: costoUnitario,
+            entradas: cantidadDevolver,
             salidas: 0,
-            valor_entradas: round2(Number(det.cantidad) * Number(det.precio_unitario)),
+            valor_entradas: valorDevolver,
             valor_salidas: 0,
-            total: round2(Number(det.cantidad) * Number(det.precio_unitario)),
-            cantidad_actual: Number(producto.stock),
-            saldo_actual: round2(Number(producto.stock) * Number(det.precio_unitario)),
-            promedio_actual: Number(det.precio_unitario),
+            total: valorDevolver,
+            cantidad_actual: stockActual,
+            saldo_actual: saldoActual,
+            promedio_actual: promedioActual,
             estado: 1,
           });
           await kardexRepo.save(kardex);
@@ -620,10 +632,16 @@ export class SalesService {
       );
       const montoTotal = round2(Number(venta.total));
 
-      // Buscar el asiento original para reversar las mismas líneas
-      const asientoOriginal = await asentadoRepo.findOne({
-        where: { consecutivo: venta.codigo, empresa_id: empresaId },
-      });
+      // Buscar el asiento original para reversar las mismas líneas.
+      // El consecutivo del asiento (VT...) es distinto al código de la venta (FV...),
+      // pero la descripción del asiento contiene el código de la venta.
+      const asientoOriginal = await asentadoRepo
+        .createQueryBuilder('a')
+        .where('a.empresa_id = :empresaId', { empresaId })
+        .andWhere('a.descripcion LIKE :codigo', { codigo: `%${venta.codigo}%` })
+        .andWhere('a.tipo = 2')
+        .orderBy('a.id', 'DESC')
+        .getOne();
 
       let lineasReversion: Partial<AccountingEntryLine>[] = [];
 

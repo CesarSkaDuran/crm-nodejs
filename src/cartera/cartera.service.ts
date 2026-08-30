@@ -97,10 +97,12 @@ export class CarteraService {
     // Calcular mora y cuotas vencidas por tercero
     const hoy = new Date().toISOString().split('T')[0];
     for (const entry of mapa.values()) {
+      const creditoIds = entry.creditos.map((c: any) => c.id);
+      if (creditoIds.length === 0) continue;
       const cuotas = await this.cuotaRepo.find({
         where: {
           empresa_id: empresaId,
-          credito_id: entry.creditos.map((c: any) => c.id),
+          credito_id: In(creditoIds),
           estado: Not(EstadoCuota.PAGADA),
           fecha_pago_oportuno: LessThanOrEqual(hoy),
         },
@@ -121,7 +123,7 @@ export class CarteraService {
 
   async findOne(terceroId: number, empresaId: number) {
     const cliente = await this.thirdRepo.findOne({
-      where: { id: terceroId, empresa_id: empresaId, tipo_terceros: 1 },
+      where: { id: terceroId, empresa_id: empresaId, tipo_terceros: In([1, 8, 10]) },
     });
     if (!cliente) {
       throw new NotFoundException('Cliente no encontrado');
@@ -203,7 +205,7 @@ export class CarteraService {
 
   async crearCredito(dto: CreateCreditoDto, empresaId: number, usuario: string) {
     const tercero = await this.thirdRepo.findOne({
-      where: { id: dto.tercero_id, empresa_id: empresaId, tipo_terceros: 1 },
+      where: { id: dto.tercero_id, empresa_id: empresaId, tipo_terceros: In([1, 8, 10]) },
     });
     if (!tercero) {
       throw new NotFoundException('Cliente no encontrado');

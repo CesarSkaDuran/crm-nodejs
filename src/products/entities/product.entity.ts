@@ -75,6 +75,9 @@ export class Product {
   @Column('decimal', { precision: 15, scale: 2, default: 0 })
   ultimo_precio: number;
 
+  @Column('decimal', { precision: 5, scale: 2, default: 0, comment: '% margen por defecto' })
+  margen: number;
+
   @Column('decimal', { precision: 15, scale: 2, default: 0 })
   pvp1: number;
 

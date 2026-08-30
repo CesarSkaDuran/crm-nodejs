@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsDateString, IsInt, IsOptional, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
 
 /**
  * Query params para el Libro por Terceros (movimientos de un tercero en una cuenta).
@@ -8,11 +9,13 @@ import { IsDateString, IsInt, IsOptional, IsString } from 'class-validator';
  */
 export class LibroTercerosDto {
   @ApiPropertyOptional({ example: 1001, description: 'ID de la cuenta contable' })
+  @Type(() => Number)
   @IsInt()
   @IsOptional()
   cuenta_id?: number;
 
   @ApiPropertyOptional({ example: 5, description: 'ID del tercero' })
+  @Type(() => Number)
   @IsInt()
   @IsOptional()
   tercero_id?: number;

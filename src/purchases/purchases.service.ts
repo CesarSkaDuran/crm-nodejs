@@ -175,6 +175,16 @@ export class PurchasesService {
         producto.saldo_inventario = saldoActual;
         producto.promedio = promedioActual;
         producto.ultimo_precio = costoUnitario;
+        // Recalcular PVP1 automáticamente manteniendo el margen.
+        // Fórmula correcta: Precio Venta = Precio Compra / (1 - (Margen / 100))
+        if (Number(producto.margen) > 0) {
+          producto.pvp1 = round2(costoUnitario / (1 - Number(producto.margen) / 100));
+          // Recalcular PVP4 = PVP1 + IVA
+          const ivaPct = Number(producto.impuesto) || 0;
+          if (ivaPct > 0) {
+            producto.pvp4 = round2(Number(producto.pvp1) * (1 + ivaPct / 100));
+          }
+        }
         await productoRepo.save(producto);
 
         const detalle = new PurchaseDetail();
@@ -532,7 +542,7 @@ export class PurchasesService {
       const contabilidadRepo = manager.getRepository(AccountingEntryLine);
       const kardexRepo = manager.getRepository(Kardex);
 
-      // 1. Restar stock
+      // 1. Restar stock y revertir costo promedio ponderado
       const detalles = await detalleRepo.find({ where: { compra_id: id } });
       for (const det of detalles) {
         const producto = await productoRepo.findOne({ where: { id: det.producto_id } });
@@ -542,7 +552,65 @@ export class PurchasesService {
               `No se puede anular: stock insuficiente del producto ${producto.nombre} (stock: ${producto.stock}, cantidad a restar: ${det.cantidad})`,
             );
           }
-          producto.stock = round2(Number(producto.stock) - Number(det.cantidad));
+
+          // Buscar el kardex de la compra original para obtener los valores exactos
+          // que tenían el producto ANTES de esa compra (cantidad_anterior, saldo_anterior, promedio_anterior).
+          const kardexCompra = await kardexRepo.findOne({
+            where: {
+              producto_id: producto.id,
+              empresa_id: empresaId,
+              tipo_documento: 'compra',
+              consecutivo: compra.codigo,
+              estado: 1,
+            },
+            order: { id: 'DESC' },
+          });
+
+          const cantidadRevertir = Number(det.cantidad);
+          const costoUnitario = Number(det.costo_unitario);
+          const valorRevertir = round2(cantidadRevertir * costoUnitario);
+
+          let stockAnterior: number;
+          let saldoAnterior: number;
+          let promedioAnterior: number;
+          let ultimoPrecioAnterior: number;
+
+          if (kardexCompra) {
+            // Usar los valores exactos del kardex anterior a la compra
+            stockAnterior = round2(Number(kardexCompra.cantidad_anterior));
+            saldoAnterior = round2(Number(kardexCompra.saldo_anterior));
+            promedioAnterior = Number(kardexCompra.promedio_anterior) || 0;
+            // El ultimo_precio anterior: buscar el kardex previo a la compra
+            const kardexPrevio = await kardexRepo.findOne({
+              where: { producto_id: producto.id, empresa_id: empresaId, estado: 1 },
+              order: { id: 'DESC' },
+            });
+            // El último_precio antes de esta compra era el promedio anterior
+            // (o el costo de la compra previa si existe)
+            ultimoPrecioAnterior =
+              stockAnterior > 0 ? promedioAnterior : Number(kardexCompra.promedio_anterior) || 0;
+          } else {
+            // Fallback: calcular reversión matemáticamente
+            stockAnterior = round2(Number(producto.stock) - cantidadRevertir);
+            saldoAnterior = round2(Number(producto.saldo_inventario) - valorRevertir);
+            promedioAnterior = stockAnterior > 0 ? round2(saldoAnterior / stockAnterior) : 0;
+            ultimoPrecioAnterior = promedioAnterior;
+          }
+
+          producto.stock = stockAnterior;
+          producto.saldo_inventario = saldoAnterior;
+          producto.promedio = promedioAnterior;
+          producto.ultimo_precio = ultimoPrecioAnterior;
+          // Recalcular PVP1 con el costo restaurado, manteniendo el margen
+          if (Number(producto.margen) > 0 && Number(producto.ultimo_precio) > 0) {
+            producto.pvp1 = round2(
+              Number(producto.ultimo_precio) / (1 - Number(producto.margen) / 100),
+            );
+            const ivaPct = Number(producto.impuesto) || 0;
+            if (ivaPct > 0) {
+              producto.pvp4 = round2(Number(producto.pvp1) * (1 + ivaPct / 100));
+            }
+          }
           await productoRepo.save(producto);
 
           // Kardex de reversión
@@ -553,18 +621,18 @@ export class PurchasesService {
             documento_id: compra.id,
             consecutivo: 'ANC' + compra.id,
             fecha: new Date().toISOString().split('T')[0],
-            cantidad_anterior: Number(producto.stock) + Number(det.cantidad),
-            saldo_anterior: round2((Number(producto.stock) + Number(det.cantidad)) * Number(det.costo_unitario)),
-            promedio_anterior: Number(det.costo_unitario),
-            valor_unitario: Number(det.costo_unitario),
+            cantidad_anterior: Number(producto.stock) + cantidadRevertir,
+            saldo_anterior: round2(saldoAnterior + valorRevertir),
+            promedio_anterior: Number(producto.promedio) || costoUnitario,
+            valor_unitario: costoUnitario,
             entradas: 0,
-            salidas: Number(det.cantidad),
+            salidas: cantidadRevertir,
             valor_entradas: 0,
-            valor_salidas: round2(Number(det.cantidad) * Number(det.costo_unitario)),
-            total: round2(Number(det.cantidad) * Number(det.costo_unitario)),
-            cantidad_actual: Number(producto.stock),
-            saldo_actual: round2(Number(producto.stock) * Number(det.costo_unitario)),
-            promedio_actual: Number(det.costo_unitario),
+            valor_salidas: valorRevertir,
+            total: valorRevertir,
+            cantidad_actual: stockAnterior,
+            saldo_actual: saldoAnterior,
+            promedio_actual: promedioAnterior,
             estado: 1,
           });
           await kardexRepo.save(kardex);
@@ -580,10 +648,16 @@ export class PurchasesService {
       );
       const montoTotal = round2(Number(compra.total));
 
-      // Buscar asiento original para reversar
-      const asientoOriginal = await asentadoRepo.findOne({
-        where: { consecutivo: compra.codigo, empresa_id: empresaId },
-      });
+      // Buscar asiento original para reversar.
+      // El consecutivo del asiento (CP...) es distinto al código de la compra (CP...),
+      // pero la descripción del asiento contiene el código de la compra.
+      const asientoOriginal = await asentadoRepo
+        .createQueryBuilder('a')
+        .where('a.empresa_id = :empresaId', { empresaId })
+        .andWhere('a.descripcion LIKE :codigo', { codigo: `%${compra.codigo}%` })
+        .andWhere('a.tipo = 1')
+        .orderBy('a.id', 'DESC')
+        .getOne();
 
       let lineasReversion: Partial<AccountingEntryLine>[] = [];
 

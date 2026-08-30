@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsDateString, IsInt, IsOptional, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
 
 /**
  * Query params para el Libro por Rango (cuentas en un rango jerárquico PUC).
@@ -11,11 +12,13 @@ import { IsDateString, IsInt, IsOptional, IsString } from 'class-validator';
  */
 export class LibroRangoDto {
   @ApiPropertyOptional({ example: 10, description: 'ID de la cuenta inicial del rango' })
+  @Type(() => Number)
   @IsInt()
   @IsOptional()
   desde_id?: number;
 
   @ApiPropertyOptional({ example: 100, description: 'ID de la cuenta final del rango' })
+  @Type(() => Number)
   @IsInt()
   @IsOptional()
   hasta_id?: number;

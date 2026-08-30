@@ -33,8 +33,14 @@ export class ProductsController {
   }
 
   @Get()
-  findAll(@CurrentUser() usuario: any) {
-    return this.productsService.findAll(usuario.empresa_id);
+  findAll(
+    @Query('categoria_id') categoriaId: string,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.productsService.findAll(
+      usuario.empresa_id,
+      categoriaId ? Number(categoriaId) : undefined,
+    );
   }
 
   @Get('sugerir-cuentas')

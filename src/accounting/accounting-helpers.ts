@@ -11,21 +11,36 @@ export async function findAccountByKeywords(
     where: { empresa_id: empresaId, estado: 1 },
   });
 
-  const lower = keywords.map((k) => k.toLowerCase());
+  // Filtramos keywords vacíos y evitamos matches accidentales por código
+  // cuando el keyword es demasiado corto (ej. "1"), lo que podría colapsar
+  // en cuentas raíz del PUC (ACTIVO, PASIVO, etc.) en vez de cuentas hoja.
+  const lower = (keywords || [])
+    .map((k) => (k ?? '').toString().toLowerCase().trim())
+    .filter((k) => k.length > 0);
 
-  const byName = cuentas.find((c) =>
+  const coincide = (c: Account) =>
     lower.some(
       (k) =>
         (c.nombre || '').toLowerCase().includes(k) ||
-        (c.codigo || '').toLowerCase().startsWith(k),
-    ),
-  );
-  if (byName) return byName;
+        (k.length >= 2 && (c.codigo || '').toLowerCase().startsWith(k)),
+    );
+  const coincidePorCodigo = (c: Account) =>
+    lower.some((k) => k.length >= 2 && (c.codigo || '').toLowerCase().startsWith(k));
+
+  // Preferimos SIEMPRE cuentas hoja (clasificacion 4 = auxiliar): las
+  // cuentas de clase/grupo/cuenta (1,2,3) suelen tener nombres genéricos
+  // (ej. "IMPUESTOS", "GASTOS") que coinciden por texto con las mismas
+  // palabras clave, causando que se postee por error en una cuenta de
+  // agrupación en vez de una auxiliar.
+  const hojas = cuentas.filter((c) => Number(c.clasificacion) === 4);
+  const noHojas = cuentas.filter((c) => Number(c.clasificacion) !== 4);
 
   return (
-    cuentas.find((c) =>
-      lower.some((k) => (c.codigo || '').toLowerCase().startsWith(k)),
-    ) || null
+    hojas.find(coincide) ||
+    hojas.find(coincidePorCodigo) ||
+    noHojas.find(coincide) ||
+    noHojas.find(coincidePorCodigo) ||
+    null
   );
 }
 

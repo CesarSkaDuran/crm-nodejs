@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsInt, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CreateCompanyDto {
   @ApiProperty({ example: 'DEMO' })
@@ -42,8 +43,15 @@ export class CreateCompanyDto {
   @IsOptional()
   ciudad?: string;
 
+  @ApiPropertyOptional({ example: 1, description: 'ID de la moneda por defecto de la empresa' })
+  @IsInt()
+  @IsOptional()
+  @Type(() => Number)
+  moneda_id?: number;
+
   @ApiPropertyOptional({ example: 1, description: '1 activo, 0 inactivo' })
   @IsInt()
   @IsOptional()
+  @Type(() => Number)
   estado?: number;
 }

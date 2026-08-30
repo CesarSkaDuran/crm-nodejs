@@ -47,6 +47,9 @@ export class Company {
   @Column({ default: 0 })
   consecutivo_asientos: number;
 
+  @Column({ nullable: true })
+  moneda_id: number;
+
   @CreateDateColumn()
   created_at: Date;
 

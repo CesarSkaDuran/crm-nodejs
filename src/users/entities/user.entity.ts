@@ -33,6 +33,12 @@ export class User {
   @Column()
   nombre: string;
 
+  @Column({ nullable: true })
+  apellido: string;
+
+  @Column({ unique: true })
+  usuario: string;
+
   @Column()
   email: string;
 

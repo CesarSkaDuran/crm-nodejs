@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsDateString, IsInt, IsOptional, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
 
 /**
  * Query params para el Libro Mayor (movimientos de una cuenta específica).
@@ -8,6 +9,7 @@ import { IsDateString, IsInt, IsOptional, IsString } from 'class-validator';
  */
 export class LibroMayorDto {
   @ApiPropertyOptional({ example: 1001, description: 'ID de la cuenta contable' })
+  @Type(() => Number)
   @IsInt()
   @IsOptional()
   cuenta_id?: number;

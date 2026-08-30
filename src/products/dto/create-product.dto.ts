@@ -78,6 +78,18 @@ export class CreateProductDto {
   @Type(() => Number)
   stock_min?: number;
 
+  @ApiPropertyOptional({ example: 100000, description: 'Precio de compra (último precio)' })
+  @IsNumber()
+  @IsOptional()
+  @Type(() => Number)
+  ultimo_precio?: number;
+
+  @ApiPropertyOptional({ example: 30, description: '% margen por defecto' })
+  @IsNumber()
+  @IsOptional()
+  @Type(() => Number)
+  margen?: number;
+
   @ApiPropertyOptional({ example: 120000 })
   @IsNumber()
   @IsOptional()

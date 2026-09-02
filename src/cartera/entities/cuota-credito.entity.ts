@@ -51,6 +51,21 @@ export class CuotaCredito {
   @Column({ type: 'date', nullable: true, comment: 'Fecha posfechada acordada con el cliente' })
   fecha_posfechada: string;
 
+  @Column('decimal', {
+    precision: 15,
+    scale: 2,
+    default: 0,
+    comment: 'Interés moratorio acumulado persistente (no se suma al saldo)',
+  })
+  interes_acumulado: number;
+
+  @Column({
+    type: 'date',
+    nullable: true,
+    comment: 'Fecha hasta la cual se ha calculado el interés acumulado',
+  })
+  fecha_ultimo_calculo_interes: string;
+
   @Column({ nullable: true })
   numero_recibo: string;
 

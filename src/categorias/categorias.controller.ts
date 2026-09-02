@@ -15,14 +15,18 @@ import { CreateCategoriaDto } from './dto/create-categoria.dto';
 import { UpdateCategoriaDto } from './dto/update-categoria.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { UserRole } from '../users/entities/user.entity';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @ApiBearerAuth()
 @ApiTags('Categorias')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('categorias')
 export class CategoriasController {
   constructor(private readonly categoriasService: CategoriasService) {}
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
   @Post()
   create(
     @Body() dto: CreateCategoriaDto,
@@ -62,6 +66,7 @@ export class CategoriasController {
     return this.categoriasService.findOne(id, usuario.empresa_id);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
   @Patch(':id')
   update(
     @Param('id', ParseIntPipe) id: number,
@@ -71,6 +76,7 @@ export class CategoriasController {
     return this.categoriasService.update(id, usuario.empresa_id, dto);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
   @Delete(':id')
   remove(
     @Param('id', ParseIntPipe) id: number,

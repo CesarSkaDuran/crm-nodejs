@@ -170,22 +170,26 @@ export class CuentasPorPagarService {
 
     const cuotas = (credito.cuotas || []).sort((a, b) => a.numero_cuota - b.numero_cuota);
     const hoy = new Date().toISOString().split('T')[0];
+    const tasaMora = Number(credito.tasa_mora) || 0;
 
-    const cuotasConMora = cuotas.map((cq) => {
+    // Acumular interés moratorio persistente en cada cuota pendiente/parcial
+    const cuotasConMora = [];
+    for (const cq of cuotas) {
       const dias_mora = cq.estado !== EstadoCuota.PAGADA
         ? this.calcularDiasMora(cq.fecha_pago_oportuno, cq.fecha_posfechada)
         : 0;
-      const interes_mora = dias_mora > 0 && Number(credito.tasa_mora) > 0
-        ? round2(Number(cq.saldo) * (Number(credito.tasa_mora) / 100) * (dias_mora / 30))
-        : 0;
-      return {
+
+      const interes_acumulado = await this.acumularInteres(cq, tasaMora);
+
+      cuotasConMora.push({
         ...cq,
         dias_mora,
-        interes_mora,
-        total_pagar: round2(Number(cq.saldo) + interes_mora),
+        interes_mora: interes_acumulado,
+        interes_acumulado,
+        total_pagar: round2(Number(cq.saldo) + interes_acumulado),
         vencida: cq.estado !== EstadoCuota.PAGADA && cq.fecha_pago_oportuno <= hoy,
-      };
-    });
+      });
+    }
 
     return {
       ...credito,
@@ -273,7 +277,7 @@ export class CuentasPorPagarService {
       const contrapartida = await this.buscarCuentaContrapartida(accountRepo, empresaId);
       if (!contrapartida) {
         throw new BadRequestException(
-          'No se encontró una cuenta de banco/caja general para registrar el crédito. Configure una cuenta con código 11xx.',
+          'No se encontró una cuenta de contrapartida (gasto 5xxx/6xxx, inventario 14xx o banco 11xx) para registrar el crédito.',
         );
       }
 
@@ -422,11 +426,32 @@ export class CuentasPorPagarService {
       }
 
       // Distribuir pago entre cuotas
+      // Orden: primero se cubre el interés acumulado, luego el saldo de la cuota
       let restante = montoAplicar;
       const cuotasActualizadas: CuotaCredito[] = [];
 
       for (const cuota of cuotas) {
         if (restante <= 0) break;
+
+        // 1. Cubrir interés acumulado primero
+        const interesPendiente = round2(Number(cuota.interes_acumulado || 0));
+        if (interesPendiente > 0 && restante > 0) {
+          const aplicarInteres = Math.min(restante, interesPendiente);
+          cuota.interes_acumulado = round2(interesPendiente - aplicarInteres);
+          restante = round2(restante - aplicarInteres);
+        }
+
+        if (restante <= 0) {
+          cuota.fecha_pago_efectivo = dto.fecha;
+          cuota.banco_id = dto.banco_id;
+          if (Number(cuota.saldo) > 0) {
+            cuota.estado = EstadoCuota.PARCIAL;
+          }
+          cuotasActualizadas.push(cuota);
+          break;
+        }
+
+        // 2. Cubrir saldo de la cuota
         const saldoCuota = round2(Number(cuota.saldo));
         const aplicar = Math.min(restante, saldoCuota);
         const nuevoAbonado = round2(Number(cuota.abonado) + aplicar);
@@ -593,14 +618,13 @@ export class CuentasPorPagarService {
 
     const cuotas = await qb.orderBy('cq.fecha_pago_oportuno', 'ASC').getMany();
 
-    const data = cuotas.map((cq) => {
+    const data = [];
+    for (const cq of cuotas) {
       const diasMora = this.calcularDiasMora(cq.fecha_pago_oportuno, cq.fecha_posfechada);
-      const interesMora =
-        diasMora > 0 && Number(cq.credito.tasa_mora) > 0
-          ? round2(Number(cq.saldo) * (Number(cq.credito.tasa_mora) / 100) * (diasMora / 30))
-          : 0;
+      const tasaMora = Number(cq.credito.tasa_mora) || 0;
+      const interes_acumulado = await this.acumularInteres(cq, tasaMora);
 
-      return {
+      data.push({
         cuota_id: cq.id,
         credito_id: cq.credito_id,
         numero_cuota: cq.numero_cuota,
@@ -612,11 +636,12 @@ export class CuentasPorPagarService {
         fecha_pago_oportuno: cq.fecha_pago_oportuno,
         fecha_posfechada: cq.fecha_posfechada,
         dias_mora: diasMora,
-        interes_mora: interesMora,
-        total_pagar: round2(Number(cq.saldo) + interesMora),
+        interes_mora: interes_acumulado,
+        interes_acumulado,
+        total_pagar: round2(Number(cq.saldo) + interes_acumulado),
         estado: cq.estado,
-      };
-    });
+      });
+    }
 
     const totalVencido = data.reduce((acc, d) => acc + d.total_pagar, 0);
 
@@ -699,6 +724,56 @@ export class CuentasPorPagarService {
     return Math.floor(diff / (1000 * 60 * 60 * 24));
   }
 
+  /**
+   * Acumula el interés moratorio persistente en la cuota.
+   * Calcula el interés desde la fecha del último cálculo (o fecha_pago_oportuno)
+   * hasta hoy y lo suma al campo `interes_acumulado`.
+   * No modifica el saldo de la cuota.
+   */
+  private async acumularInteres(cuota: CuotaCredito, tasaMora: number): Promise<number> {
+    if (cuota.estado === EstadoCuota.PAGADA || tasaMora <= 0) {
+      return Number(cuota.interes_acumulado || 0);
+    }
+
+    const hoy = new Date().toISOString().split('T')[0];
+    const fechaReferencia = cuota.fecha_posfechada || cuota.fecha_pago_oportuno;
+
+    if (hoy <= fechaReferencia) {
+      return Number(cuota.interes_acumulado || 0);
+    }
+
+    const desde = cuota.fecha_ultimo_calculo_interes || fechaReferencia;
+    if (hoy <= desde) {
+      return Number(cuota.interes_acumulado || 0);
+    }
+
+    const fechaDesde = new Date(desde);
+    fechaDesde.setHours(0, 0, 0, 0);
+    const fechaHasta = new Date(hoy);
+    fechaHasta.setHours(0, 0, 0, 0);
+
+    const diasNuevos = Math.floor(
+      (fechaHasta.getTime() - fechaDesde.getTime()) / (1000 * 60 * 60 * 24),
+    );
+
+    if (diasNuevos <= 0) {
+      return Number(cuota.interes_acumulado || 0);
+    }
+
+    const interesNuevo = round2(
+      Number(cuota.saldo) * (tasaMora / 100) * (diasNuevos / 30),
+    );
+
+    const interesTotal = round2(Number(cuota.interes_acumulado || 0) + interesNuevo);
+
+    await this.cuotaRepo.update(cuota.id, {
+      interes_acumulado: interesTotal,
+      fecha_ultimo_calculo_interes: hoy,
+    });
+
+    return interesTotal;
+  }
+
   private calcularPagoMinimo(credito: Credito): number {
     const dias = DIAS_POR_PERIODO[credito.periodo] || 30;
     const div = Math.floor(Number(credito.mora) / dias) + 1;
@@ -713,11 +788,16 @@ export class CuentasPorPagarService {
     const cuentas = await accountRepo.find({
       where: { empresa_id: empresaId, estado: 1 },
     });
+    // Para un crédito manual a proveedor, la contrapartida lógica es:
+    // 1. Cuenta de gasto/costo (5xxx, 6xxx) — lo más común al registrar una obligación
+    // 2. Cuenta de inventario/mercancías (14xx) — si es por compra de existencias
+    // 3. Cuenta de banco/caja (11xx) — si es un préstamo en efectivo del proveedor
+    // Nunca una cuenta de pasivo (2xxx) porque sería el mismo lado del asiento
     return (
-      cuentas.find((c) => (c.codigo || '').startsWith('2205') && (c.nombre || '').toLowerCase().includes('general')) ||
-      cuentas.find((c) => (c.codigo || '').startsWith('2205')) ||
-      cuentas.find((c) => (c.codigo || '').startsWith('22')) ||
-      cuentas.find((c) => (c.codigo || '').startsWith('11')) ||
+      cuentas.find((c) => /^5\./.test(c.codigo || '') || /^5\d/.test(c.codigo || '')) ||
+      cuentas.find((c) => /^6\./.test(c.codigo || '') || /^6\d/.test(c.codigo || '')) ||
+      cuentas.find((c) => /^1\.4/.test(c.codigo || '') || /^14/.test(c.codigo || '')) ||
+      cuentas.find((c) => /^1\.1/.test(c.codigo || '') || /^11/.test(c.codigo || '')) ||
       null
     );
   }

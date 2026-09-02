@@ -12,14 +12,18 @@ import { SalesService } from './sales.service';
 import { CreateSaleDto } from './dto/create-sale.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { UserRole } from '../users/entities/user.entity';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @ApiBearerAuth()
 @ApiTags('Ventas')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('ventas')
 export class SalesController {
   constructor(private readonly salesService: SalesService) {}
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
   @Post()
   create(
     @Body() dto: CreateSaleDto,
@@ -41,6 +45,7 @@ export class SalesController {
     return this.salesService.findOne(id, usuario.empresa_id);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
   @Post(':id/anular')
   anular(
     @Param('id', ParseIntPipe) id: number,

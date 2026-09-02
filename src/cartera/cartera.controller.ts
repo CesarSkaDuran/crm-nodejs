@@ -15,10 +15,13 @@ import { RegistrarCobroDto } from './dto/registrar-cobro.dto';
 import { PosfecharCuotaDto } from './dto/posfechar-cuota.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { UserRole } from '../users/entities/user.entity';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @ApiBearerAuth()
 @ApiTags('Cartera')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('cartera')
 export class CarteraController {
   constructor(private readonly carteraService: CarteraService) {}
@@ -49,6 +52,7 @@ export class CarteraController {
     return this.carteraService.findOne(terceroId, usuario.empresa_id);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
   @Post('credito')
   crearCredito(
     @Body() dto: CreateCreditoDto,
@@ -57,6 +61,7 @@ export class CarteraController {
     return this.carteraService.crearCredito(dto, usuario.empresa_id, usuario.name);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
   @Post('cobro')
   cobrar(
     @Body() dto: RegistrarCobroDto,
@@ -65,6 +70,7 @@ export class CarteraController {
     return this.carteraService.cobrar(dto, usuario.empresa_id, usuario.name);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
   @Post('posfechar')
   posfechar(
     @Body() dto: PosfecharCuotaDto,

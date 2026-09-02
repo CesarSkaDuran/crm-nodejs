@@ -201,6 +201,50 @@ export class InventarioFisicoService {
   }
 
   /**
+   * Guarda los conteos parcialmente sin cambiar el estado del inventario.
+   * Permite al usuario ir registrando conteos y continuar después.
+   */
+  async guardarParcial(id: number, dto: ConsolidarInventarioDto, empresaId: number) {
+    const inventario = await this.invRepo.findOne({
+      where: { id, empresa_id: empresaId },
+    });
+    if (!inventario) {
+      throw new NotFoundException('Inventario no encontrado');
+    }
+    if (inventario.estado !== EstadoInventario.PENDIENTE) {
+      throw new BadRequestException('Solo se pueden guardar conteos parciales en inventarios pendientes');
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      const detRepo = manager.getRepository(DetalleInventarioFisico);
+      const invRepo = manager.getRepository(InventarioFisico);
+
+      let valorConteoTotal = 0;
+      for (const c of dto.conteos) {
+        const detalle = await detRepo.findOne({
+          where: { inventario_id: id, producto_id: c.producto_id, empresa_id: empresaId },
+        });
+        if (!detalle) continue;
+
+        detalle.conteo = Number(c.conteo);
+        detalle.diferencia = round2(Number(detalle.cantidad_sistema) - Number(c.conteo));
+        detalle.valor_conteo = round2(Number(detalle.costo_unitario) * Number(c.conteo));
+        // NO cambiamos el estado del detalle ni del inventario
+        await detRepo.save(detalle);
+
+        valorConteoTotal += detalle.valor_conteo;
+      }
+
+      // Actualizar totales sin cambiar el estado
+      inventario.valor_conteo = round2(valorConteoTotal);
+      inventario.diferencia = round2(Number(inventario.valor_sistema) - valorConteoTotal);
+      await invRepo.save(inventario);
+
+      return inventario;
+    });
+  }
+
+  /**
    * Finaliza el inventario: ajusta stock, genera asientos contables y kardex
    */
   async finalizar(id: number, dto: FinalizarInventarioDto, empresaId: number, usuario: string) {

@@ -14,10 +14,13 @@ import { AccountingService } from './accounting.service';
 import { CreateAsentadoDto } from './dto/create-accounting-entry.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { UserRole } from '../users/entities/user.entity';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @ApiBearerAuth()
 @ApiTags('Contabilidad')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('asentados')
 export class AccountingController {
   constructor(private readonly accountingService: AccountingService) {}
@@ -38,6 +41,7 @@ export class AccountingController {
     return this.accountingService.findOne(id, usuario.empresa_id);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
   @Post()
   create(
     @Body() dto: CreateAsentadoDto,
@@ -46,6 +50,7 @@ export class AccountingController {
     return this.accountingService.create(dto, usuario.empresa_id, usuario.name);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
   @Delete(':id')
   remove(
     @Param('id', ParseIntPipe) id: number,

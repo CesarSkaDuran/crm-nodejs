@@ -16,20 +16,41 @@ import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { Roles } from '../common/decorators/roles.decorator';
+import { UserRole } from '../users/entities/user.entity';
 
 @ApiBearerAuth()
 @ApiTags('Productos')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('productos')
 export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
   @Post()
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
   create(
     @Body() dto: CreateProductDto,
     @CurrentUser() usuario: any,
   ) {
     return this.productsService.create(dto, usuario.empresa_id);
+  }
+
+  /**
+   * Importación masiva de productos desde Excel/CSV.
+   * Body: { filas: [{ codigo, nombre, categoria, grupo, stock, ... }] }
+   * Retorna: { creados, actualizados, errores, total }
+   */
+  @Post('import')
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
+  importar(
+    @Body() body: { filas: any[] },
+    @CurrentUser() usuario: any,
+  ) {
+    if (!body?.filas || !Array.isArray(body.filas)) {
+      return { creados: 0, actualizados: 0, errores: [{ error: 'Se requiere un arreglo "filas"' }], total: 0 };
+    }
+    return this.productsService.importar(body.filas, usuario.empresa_id);
   }
 
   @Get()
@@ -65,6 +86,7 @@ export class ProductsController {
   }
 
   @Patch(':id')
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
   update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateProductDto,
@@ -74,6 +96,7 @@ export class ProductsController {
   }
 
   @Delete(':id')
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
   remove(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() usuario: any,

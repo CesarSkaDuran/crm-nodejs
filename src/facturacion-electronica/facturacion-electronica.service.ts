@@ -42,13 +42,33 @@ export class FacturacionElectronicaService {
   async getConfig(empresaId: number) {
     const config = await this.configRepo.findOne({ where: { empresa_id: empresaId } });
     if (!config) {
-      return { configurado: false };
+      return { configurado: false, activa: false };
     }
     return {
       configurado: true,
+      activa: config.estado === 1,
       ...config,
       consecutivo_actual: config.ultimo_consecutivo + 1,
       consecutivos_disponibles: config.rango_fin - config.ultimo_consecutivo,
+    };
+  }
+
+  /**
+   * Activa o desactiva la facturación electrónica para la empresa
+   */
+  async toggle(empresaId: number) {
+    let config = await this.configRepo.findOne({ where: { empresa_id: empresaId } });
+    if (!config) {
+      // Crear config por defecto inactiva
+      config = this.configRepo.create({ empresa_id: empresaId, estado: 0 });
+    }
+    config.estado = config.estado === 1 ? 0 : 1;
+    await this.configRepo.save(config);
+    return {
+      activa: config.estado === 1,
+      mensaje: config.estado === 1
+        ? 'Facturación electrónica activada'
+        : 'Facturación electrónica desactivada',
     };
   }
 
@@ -240,6 +260,7 @@ export class FacturacionElectronicaService {
 
     return {
       configurado: true,
+      activa: config.estado === 1,
       resolucion: config.resolucion,
       prefijo: config.prefijo,
       rango_inicio: config.rango_inicio,

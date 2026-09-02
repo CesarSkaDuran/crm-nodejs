@@ -10,10 +10,13 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { KardexService } from './kardex.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { UserRole } from '../users/entities/user.entity';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @ApiBearerAuth()
 @ApiTags('Kardex')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('kardex')
 export class KardexController {
   constructor(private readonly kardexService: KardexService) {}

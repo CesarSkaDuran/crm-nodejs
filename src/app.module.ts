@@ -24,6 +24,7 @@ import { InventarioFisicoModule } from './inventario-fisico/inventario-fisico.mo
 import { FacturacionElectronicaModule } from './facturacion-electronica/facturacion-electronica.module';
 import { TiposDocumentoModule } from './tipos-documento/tipos-documento.module';
 import { MonedasModule } from './monedas/monedas.module';
+import { PeriodosPagoModule } from './periodos-pago/periodos-pago.module';
 
 @Module({
   imports: [
@@ -67,6 +68,7 @@ import { MonedasModule } from './monedas/monedas.module';
     FacturacionElectronicaModule,
     TiposDocumentoModule,
     MonedasModule,
+    PeriodosPagoModule,
   ],
   controllers: [AppController],
   providers: [AppService],

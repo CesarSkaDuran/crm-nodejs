@@ -165,6 +165,140 @@ export class ProductsService {
     await this.repo.remove(producto);
   }
 
+  /**
+   * Importación masiva de productos desde Excel/CSV.
+   *
+   * Cada fila puede traer:
+   *  - codigo (requerido)
+   *  - nombre (requerido)
+   *  - categoria (nombre de la categoría — se busca/crea automáticamente)
+   *  - grupo (texto libre, opcional)
+   *  - stock, ultimo_precio, margen, pvp1..pvp3, impuesto, etc.
+   *
+   * Si el producto ya existe (mismo codigo), se actualiza (upsert).
+   * Si la categoría no existe, se crea como categoría hoja.
+   *
+   * Retorna: { creados, actualizados, errores, total }
+   */
+  async importar(
+    filas: any[],
+    empresaId: number,
+  ): Promise<{ creados: number; actualizados: number; errores: any[]; total: number }> {
+    const errores: any[] = [];
+    let creados = 0;
+    let actualizados = 0;
+
+    // Pre-cargar todas las categorías de la empresa para evitar N queries
+    const categoriasExistentes = await this.categoriaRepo.find({
+      where: { empresa_id: empresaId, estado: 1 },
+    });
+    const catMap = new Map<string, Categoria>();
+    for (const c of categoriasExistentes) {
+      catMap.set(c.nombre.toLowerCase().trim(), c);
+    }
+
+    // Pre-cargar productos existentes por código
+    const codigos = filas
+      .map((f) => (f.codigo ?? '').toString().trim())
+      .filter((c) => c.length > 0);
+    const productosExistentes = codigos.length
+      ? await this.repo.find({
+          where: codigos.map((codigo) => ({ codigo, empresa_id: empresaId })),
+        })
+      : [];
+    const prodMap = new Map<string, Product>();
+    for (const p of productosExistentes) {
+      prodMap.set(p.codigo, p);
+    }
+
+    for (let i = 0; i < filas.length; i++) {
+      const fila = filas[i];
+      const filaNum = i + 2; // +2 porque la fila 1 es el header
+      try {
+        const codigo = (fila.codigo ?? '').toString().trim();
+        const nombre = (fila.nombre ?? '').toString().trim();
+
+        if (!codigo || !nombre) {
+          errores.push({
+            fila: filaNum,
+            error: 'Código y nombre son obligatorios',
+          });
+          continue;
+        }
+
+        // Resolver categoría por nombre
+        let categoriaId: number | undefined;
+        const catNombre = (fila.categoria ?? '').toString().trim();
+        if (catNombre) {
+          const key = catNombre.toLowerCase();
+          let cat = catMap.get(key);
+          if (!cat) {
+            // Crear la categoría como hoja
+            cat = this.categoriaRepo.create({
+              nombre: catNombre,
+              empresa_id: empresaId,
+              tipo: 1,
+              estado: 1,
+            });
+            cat = await this.categoriaRepo.save(cat);
+            catMap.set(key, cat);
+          }
+          categoriaId = cat.id;
+        }
+
+        // Construir DTO
+        const dto: any = {
+          codigo,
+          nombre,
+          descripcion: (fila.descripcion ?? '').toString().trim() || undefined,
+          cod_barra: (fila.cod_barra ?? '').toString().trim() || undefined,
+          referencia: (fila.referencia ?? '').toString().trim() || undefined,
+          unidad_medida: (fila.unidad_medida ?? '').toString().trim() || undefined,
+          grupo: (fila.grupo ?? '').toString().trim() || undefined,
+          stock: Number(fila.stock || 0),
+          stock_min: Number(fila.stock_min || 0),
+          ultimo_precio: Number(fila.ultimo_precio || 0),
+          margen: Number(fila.margen || 0),
+          pvp1: Number(fila.pvp1 || 0),
+          pvp2: Number(fila.pvp2 || 0),
+          pvp3: Number(fila.pvp3 || 0),
+          impuesto: Number(fila.impuesto ?? 19),
+          descuento: Number(fila.descuento || 0),
+          comision: Number(fila.comision || 0),
+          peso: Number(fila.peso || 0),
+          tipo: Number(fila.tipo || 1),
+          estado: 1,
+        };
+        if (categoriaId) {
+          dto.categoria_id = categoriaId;
+        }
+
+        this.recalcularPrecios(dto);
+
+        const existente = prodMap.get(codigo);
+        if (existente) {
+          // Actualizar
+          Object.assign(existente, dto);
+          await this.repo.save(existente);
+          actualizados++;
+        } else {
+          // Crear
+          const producto = this.repo.create({ ...dto, empresa_id: empresaId } as any) as unknown as Product;
+          const guardado = await this.repo.save(producto);
+          prodMap.set(codigo, guardado);
+          creados++;
+        }
+      } catch (err: any) {
+        errores.push({
+          fila: filaNum,
+          error: err?.message || 'Error desconocido',
+        });
+      }
+    }
+
+    return { creados, actualizados, errores, total: filas.length };
+  }
+
   private buscarCuenta(cuentas: Account[], keywords: string[]) {
     // Filtramos keywords vacíos/nulos y evitamos que valores muy cortos
     // (ej. IDs de categoría convertidos a string como "1", "2") colapsen

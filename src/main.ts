@@ -1,7 +1,8 @@
 import { NestFactory } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, BadRequestException } from '@nestjs/common';
 import { AppModule } from './app.module';
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -14,8 +15,16 @@ async function bootstrap() {
       transform: true,
       transformOptions: { enableImplicitConversion: true },
       forbidNonWhitelisted: true,
+      exceptionFactory: (errors) => {
+        const messages = errors.map(
+          (e) => `${e.property}: ${Object.values(e.constraints || {}).join(', ')}`,
+        );
+        return new BadRequestException(messages.join('; '));
+      },
     }),
   );
+
+  app.useGlobalFilters(new AllExceptionsFilter());
 
   const config = new DocumentBuilder()
     .setTitle('CRM API')

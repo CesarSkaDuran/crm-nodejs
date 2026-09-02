@@ -12,14 +12,18 @@ import { InventarioFisicoService } from './inventario-fisico.service';
 import { CreateInventarioDto, ConsolidarInventarioDto, FinalizarInventarioDto } from './dto/inventario-fisico.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { UserRole } from '../users/entities/user.entity';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @ApiBearerAuth()
 @ApiTags('Inventario físico')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('inventario-fisico')
 export class InventarioFisicoController {
   constructor(private readonly service: InventarioFisicoService) {}
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
   @Post()
   crear(
     @Body() dto: CreateInventarioDto,
@@ -51,6 +55,7 @@ export class InventarioFisicoController {
     return this.service.findOne(id, usuario.empresa_id);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
   @Post(':id/consolidar')
   consolidar(
     @Param('id', ParseIntPipe) id: number,
@@ -60,6 +65,17 @@ export class InventarioFisicoController {
     return this.service.consolidar(id, dto, usuario.empresa_id);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
+  @Post(':id/conteos')
+  guardarParcial(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ConsolidarInventarioDto,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.service.guardarParcial(id, dto, usuario.empresa_id);
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
   @Post(':id/finalizar')
   finalizar(
     @Param('id', ParseIntPipe) id: number,
@@ -69,6 +85,7 @@ export class InventarioFisicoController {
     return this.service.finalizar(id, dto, usuario.empresa_id, usuario.name);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
   @Post(':id/anular')
   anular(
     @Param('id', ParseIntPipe) id: number,

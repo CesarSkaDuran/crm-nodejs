@@ -16,10 +16,13 @@ import { CreateTesoreriaDto } from './dto/create-tesoreria.dto';
 import { UpdateTesoreriaDto } from './dto/update-tesoreria.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { UserRole } from '../users/entities/user.entity';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @ApiBearerAuth()
 @ApiTags('Tesoreria')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('tesoreria')
 export class TesoreriaController {
   constructor(private readonly tesoreriaService: TesoreriaService) {}
@@ -40,6 +43,7 @@ export class TesoreriaController {
     return this.tesoreriaService.findOne(id, usuario.empresa_id);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
   @Post()
   create(
     @Body() dto: CreateTesoreriaDto,
@@ -48,6 +52,7 @@ export class TesoreriaController {
     return this.tesoreriaService.create(dto, usuario.empresa_id, usuario.email || usuario.sub || 'sistema');
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
   @Patch(':id')
   update(
     @Param('id', ParseIntPipe) id: number,
@@ -57,6 +62,7 @@ export class TesoreriaController {
     return this.tesoreriaService.update(id, usuario.empresa_id, dto);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
   @Delete(':id')
   remove(
     @Param('id', ParseIntPipe) id: number,

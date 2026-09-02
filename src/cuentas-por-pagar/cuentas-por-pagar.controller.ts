@@ -15,10 +15,13 @@ import { RegistrarPagoDto } from './dto/registrar-pago.dto';
 import { PosfecharPagoDto } from './dto/posfechar-pago.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { UserRole } from '../users/entities/user.entity';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @ApiBearerAuth()
 @ApiTags('Cuentas por pagar')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('cuentas-por-pagar')
 export class CuentasPorPagarController {
   constructor(private readonly service: CuentasPorPagarService) {}
@@ -49,6 +52,7 @@ export class CuentasPorPagarController {
     return this.service.findOne(terceroId, usuario.empresa_id);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
   @Post('credito')
   crearCredito(
     @Body() dto: CreateCreditoProveedorDto,
@@ -57,6 +61,7 @@ export class CuentasPorPagarController {
     return this.service.crearCredito(dto, usuario.empresa_id, usuario.name);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
   @Post('pago')
   pagar(
     @Body() dto: RegistrarPagoDto,
@@ -65,6 +70,7 @@ export class CuentasPorPagarController {
     return this.service.pagar(dto, usuario.empresa_id, usuario.name);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
   @Post('posfechar')
   posfechar(
     @Body() dto: PosfecharPagoDto,

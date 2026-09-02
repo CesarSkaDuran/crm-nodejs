@@ -16,14 +16,18 @@ import { CreateThirdDto } from './dto/create-third.dto';
 import { UpdateThirdDto } from './dto/update-third.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { UserRole } from '../users/entities/user.entity';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @ApiBearerAuth()
 @ApiTags('Terceros')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('terceros')
 export class ThirdsController {
   constructor(private readonly thirdsService: ThirdsService) {}
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
   @Post()
   create(
     @Body() dto: CreateThirdDto,
@@ -56,6 +60,7 @@ export class ThirdsController {
     return this.thirdsService.findOne(id, usuario.empresa_id);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
   @Patch(':id')
   update(
     @Param('id', ParseIntPipe) id: number,
@@ -65,6 +70,7 @@ export class ThirdsController {
     return this.thirdsService.update(id, usuario.empresa_id, dto);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
   @Delete(':id')
   remove(
     @Param('id', ParseIntPipe) id: number,

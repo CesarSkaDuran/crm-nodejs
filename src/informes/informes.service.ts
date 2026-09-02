@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Brackets } from 'typeorm';
 import { AccountingEntryLine } from '../accounting/entities/accounting-entry.entity';
@@ -47,6 +47,31 @@ export class InformesService {
   // LIBROS AUXILIARES
   // ===========================================================================
 
+  private readonly MODOS_VALIDOS = ['detallado', 'resumido', 'porComprobante', 'discriminado'];
+
+  /**
+   * Valida que el modo sea uno de los permitidos.
+   */
+  private validarModo(modo: string) {
+    if (modo && !this.MODOS_VALIDOS.includes(modo)) {
+      throw new BadRequestException(
+        `Modo inválido: "${modo}". Valores permitidos: ${this.MODOS_VALIDOS.join(', ')}`,
+      );
+    }
+  }
+
+  /**
+   * Valida que el rango de fechas sea consistente (date <= date2).
+   * Si alguna fecha falta, no se valida.
+   */
+  private validarRangoFechas(date?: string, date2?: string) {
+    if (date && date2 && new Date(date) > new Date(date2)) {
+      throw new BadRequestException(
+        'La fecha inicial no puede ser mayor que la fecha final',
+      );
+    }
+  }
+
   /**
    * Genera el Libro Auxiliar (Libro Mayor) para una cuenta específica.
    *
@@ -66,11 +91,13 @@ export class InformesService {
    *   - El saldo se calcula según naturaleza: D -> Deb-Cre, C -> Cre-Deb
    */
   async libroMayor(query: any, empresaId: number) {
-    const { cuenta_id, modo = 'detallado' } = query;
+    const { cuenta_id, modo = 'detallado', date, date2 } = query;
 
     if (!cuenta_id) {
-      throw new NotFoundException('Debe seleccionar una cuenta');
+      throw new BadRequestException('Debe seleccionar una cuenta');
     }
+    this.validarModo(modo);
+    this.validarRangoFechas(date, date2);
 
     const cuenta = await this.accountRepo.findOne({
       where: { id: Number(cuenta_id), empresa_id: empresaId },
@@ -98,19 +125,24 @@ export class InformesService {
    *     y final, agrupadas con Brackets de TypeORM.
    */
   async libroRango(query: any, empresaId: number) {
-    const { desde_id, hasta_id, modo = 'detallado' } = query;
+    const { desde_id, hasta_id, modo = 'detallado', date, date2 } = query;
 
     if (!desde_id || !hasta_id) {
-      throw new NotFoundException('Debe seleccionar cuenta inicial y final');
+      throw new BadRequestException('Debe seleccionar cuenta inicial y final');
     }
+    this.validarModo(modo);
+    this.validarRangoFechas(date, date2);
 
     const [desde, hasta] = await Promise.all([
       this.accountRepo.findOne({ where: { id: Number(desde_id), empresa_id: empresaId } }),
       this.accountRepo.findOne({ where: { id: Number(hasta_id), empresa_id: empresaId } }),
     ]);
 
-    if (!desde || !hasta) {
-      throw new NotFoundException('Cuentas no encontradas');
+    if (!desde) {
+      throw new NotFoundException(`Cuenta inicial (id=${desde_id}) no encontrada`);
+    }
+    if (!hasta) {
+      throw new NotFoundException(`Cuenta final (id=${hasta_id}) no encontrada`);
     }
 
     return this.buildLibro(
@@ -129,14 +161,16 @@ export class InformesService {
    * @returns Estructura del libro con movimientos del tercero en la cuenta
    */
   async libroTerceros(query: any, empresaId: number) {
-    const { tercero_id, cuenta_id, modo = 'detallado' } = query;
+    const { tercero_id, cuenta_id, modo = 'detallado', date, date2 } = query;
 
     if (!tercero_id) {
-      throw new NotFoundException('Debe seleccionar un tercero');
+      throw new BadRequestException('Debe seleccionar un tercero');
     }
     if (!cuenta_id) {
-      throw new NotFoundException('Debe seleccionar una cuenta');
+      throw new BadRequestException('Debe seleccionar una cuenta');
     }
+    this.validarModo(modo);
+    this.validarRangoFechas(date, date2);
 
     const cuenta = await this.accountRepo.findOne({
       where: { id: Number(cuenta_id), empresa_id: empresaId },
@@ -763,6 +797,7 @@ export class InformesService {
    */
   async balanceGeneral(query: any, empresaId: number) {
     const { date, date2 } = query;
+    this.validarRangoFechas(date, date2);
 
     // =========================================================================
     // 1. Cargar plan de cuentas: clases 1 (Activo), 2 (Pasivo), 3 (Patrimonio)
@@ -1314,6 +1349,7 @@ export class InformesService {
    */
   async pyg(query: any, empresaId: number) {
     const { date, date2 } = query;
+    this.validarRangoFechas(date, date2);
 
     // --- 1. Construir filtros de fecha ---
     // Fase 2: Se mantiene parámetros posicionales (?) porque lineRepo.query()

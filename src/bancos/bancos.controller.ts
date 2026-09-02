@@ -16,10 +16,13 @@ import { CreateBancoDto } from './dto/create-banco.dto';
 import { UpdateBancoDto } from './dto/update-banco.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { UserRole } from '../users/entities/user.entity';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @ApiBearerAuth()
 @ApiTags('Bancos')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('bancos')
 export class BancosController {
   constructor(private readonly bancosService: BancosService) {}
@@ -40,6 +43,7 @@ export class BancosController {
     return this.bancosService.findOne(id, usuario.empresa_id);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
   @Post()
   create(
     @Body() dto: CreateBancoDto,
@@ -48,6 +52,7 @@ export class BancosController {
     return this.bancosService.create(dto, usuario.empresa_id);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
   @Patch(':id')
   update(
     @Param('id', ParseIntPipe) id: number,
@@ -57,6 +62,7 @@ export class BancosController {
     return this.bancosService.update(id, usuario.empresa_id, dto);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
   @Delete(':id')
   remove(
     @Param('id', ParseIntPipe) id: number,

@@ -3,6 +3,9 @@ import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { InformesService } from './informes.service';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { UserRole } from '../users/entities/user.entity';
+import { Roles } from '../common/decorators/roles.decorator';
 import {
   LibroMayorDto,
   LibroRangoDto,
@@ -13,7 +16,7 @@ import {
 
 @ApiBearerAuth()
 @ApiTags('Informes')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('informes')
 export class InformesController {
   constructor(private readonly informesService: InformesService) {}

@@ -32,6 +32,54 @@ export class ThirdsService {
     }
   }
 
+  /**
+   * Busca automáticamente una cuenta contable adecuada según el tipo de tercero.
+   * Prioriza cuentas hoja (clasificacion=4) y busca por palabras clave del PUC colombiano.
+   * Retorna null si no encuentra ninguna cuenta candidata.
+   */
+  private async sugerirCuentaPorTipo(
+    empresaId: number,
+    tipoTerceros: number,
+  ): Promise<number | null> {
+    const palabras: Record<number, string[]> = {
+      // TipoTercero.CLIENTE
+      1: ['cliente', '1305', '1.3.05', 'cuenta por cobrar'],
+      // TipoTercero.PROVEEDOR
+      2: ['proveedor', '2205', '2.2.05', 'cuenta por pagar'],
+      // TipoTercero.EMPLEADO
+      3: ['empleado', 'salario', '2335', '2.3.35', 'obligacion laboral'],
+      // TipoTercero.VENDEDOR
+      4: ['vendedor', 'comision', '1305', '1.3.05'],
+      // TipoTercero.OTRO -> 1305 por defecto (cuentas por cobrar)
+      5: ['1305', '1.3.05', 'cliente', 'cuenta por cobrar'],
+    };
+
+    const terminos = palabras[tipoTerceros] || palabras[5];
+    const qb = this.cuentaRepo
+      .createQueryBuilder('c')
+      .where('c.empresa_id = :empresaId', { empresaId })
+      .andWhere('c.estado = 1');
+
+    // Construir OR con LIKE por cada término (código o nombre)
+    const condiciones: string[] = [];
+    const params: any = { empresaId };
+    terminos.forEach((t, i) => {
+      condiciones.push(
+        `(LOWER(c.codigo) LIKE :t${i} OR LOWER(c.nombre) LIKE :t${i})`,
+      );
+      params[`t${i}`] = `%${t.toLowerCase()}%`;
+    });
+    qb.andWhere(`(${condiciones.join(' OR ')})`, params);
+
+    // Preferir cuentas hoja (clasificacion=4) y ordenar por código
+    qb.orderBy('CASE c.clasificacion WHEN 4 THEN 0 ELSE 1 END', 'ASC')
+      .addOrderBy('c.codigo', 'ASC')
+      .limit(1);
+
+    const cuenta = await qb.getOne();
+    return cuenta ? cuenta.id : null;
+  }
+
   private async generarCodigo(empresaId: number): Promise<string> {
     const total = await this.repo.count({ where: { empresa_id: empresaId } });
     let consecutivo = total + 1;
@@ -59,7 +107,22 @@ export class ThirdsService {
 
     await this.validarCuenta(empresaId, dto.cuenta_contable_id);
 
-    const tercero = this.repo.create({ ...dto, codigo, empresa_id: empresaId });
+    // Auto-asignar cuenta contable según tipo_terceros si no se especificó
+    let cuentaContableId = dto.cuenta_contable_id;
+    if (!cuentaContableId) {
+      const sugerida = await this.sugerirCuentaPorTipo(
+        empresaId,
+        dto.tipo_terceros ?? 1,
+      );
+      if (sugerida) cuentaContableId = sugerida;
+    }
+
+    const tercero = this.repo.create({
+      ...dto,
+      codigo,
+      cuenta_contable_id: cuentaContableId,
+      empresa_id: empresaId,
+    });
     return this.repo.save(tercero);
   }
 

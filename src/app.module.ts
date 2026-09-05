@@ -25,6 +25,11 @@ import { FacturacionElectronicaModule } from './facturacion-electronica/facturac
 import { TiposDocumentoModule } from './tipos-documento/tipos-documento.module';
 import { MonedasModule } from './monedas/monedas.module';
 import { PeriodosPagoModule } from './periodos-pago/periodos-pago.module';
+import { ConciliacionesModule } from './conciliaciones/conciliaciones.module';
+import { CierresModule } from './cierres/cierres.module';
+import { ReportesModule } from './reportes/reportes.module';
+import { AuditoriaModule } from './auditoria/auditoria.module';
+import { ValidacionesModule } from './validaciones/validaciones.module';
 
 @Module({
   imports: [
@@ -69,6 +74,11 @@ import { PeriodosPagoModule } from './periodos-pago/periodos-pago.module';
     TiposDocumentoModule,
     MonedasModule,
     PeriodosPagoModule,
+    ConciliacionesModule,
+    CierresModule,
+    ReportesModule,
+    AuditoriaModule,
+    ValidacionesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

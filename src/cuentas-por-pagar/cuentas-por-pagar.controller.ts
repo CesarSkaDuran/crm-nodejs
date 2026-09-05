@@ -58,7 +58,7 @@ export class CuentasPorPagarController {
     @Body() dto: CreateCreditoProveedorDto,
     @CurrentUser() usuario: any,
   ) {
-    return this.service.crearCredito(dto, usuario.empresa_id, usuario.name);
+    return this.service.crearCredito(dto, usuario.empresa_id, usuario.nombre);
   }
 
   @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
@@ -67,7 +67,7 @@ export class CuentasPorPagarController {
     @Body() dto: RegistrarPagoDto,
     @CurrentUser() usuario: any,
   ) {
-    return this.service.pagar(dto, usuario.empresa_id, usuario.name);
+    return this.service.pagar(dto, usuario.empresa_id, usuario.nombre);
   }
 
   @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)

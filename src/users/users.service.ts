@@ -9,15 +9,18 @@ import * as bcrypt from 'bcryptjs';
 import { User } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { AuditoriaService } from '../auditoria/auditoria.service';
+import { TipoOperacion } from '../auditoria/entities/auditoria.entity';
 
 @Injectable()
 export class UsersService {
   constructor(
     @InjectRepository(User)
     private readonly repo: Repository<User>,
+    private readonly auditoria: AuditoriaService,
   ) {}
 
-  async create(dto: CreateUserDto, empresaId: number) {
+  async create(dto: CreateUserDto, empresaId: number, usuarioActual?: string) {
     const exists = await this.repo.findOne({
       where: { email: dto.email, empresa_id: empresaId },
     });
@@ -35,6 +38,18 @@ export class UsersService {
     );
 
     const { password, ...result } = saved;
+
+    await this.auditoria.registrar(
+      empresaId,
+      'usuarios',
+      saved.id,
+      TipoOperacion.CREAR,
+      usuarioActual || 'sistema',
+      null,
+      result,
+      `Usuario ${result.nombre} creado`,
+    );
+
     return result;
   }
 
@@ -55,8 +70,9 @@ export class UsersService {
     return usuario;
   }
 
-  async update(id: number, empresaId: number, dto: UpdateUserDto) {
+  async update(id: number, empresaId: number, dto: UpdateUserDto, usuarioActual?: string) {
     const usuario = await this.findOne(id, empresaId);
+    const { password: passwordAnterior, ...valoresAnteriores } = usuario;
 
     if (dto.email && dto.email !== usuario.email) {
       const exists = await this.repo.findOne({
@@ -74,11 +90,35 @@ export class UsersService {
     Object.assign(usuario, dto);
     const saved = await this.repo.save(usuario);
     const { password, ...result } = saved;
+
+    await this.auditoria.registrar(
+      empresaId,
+      'usuarios',
+      id,
+      TipoOperacion.ACTUALIZAR,
+      usuarioActual || 'sistema',
+      valoresAnteriores,
+      result,
+      `Usuario ${result.nombre} actualizado`,
+    );
+
     return result;
   }
 
-  async remove(id: number, empresaId: number) {
+  async remove(id: number, empresaId: number, usuarioActual?: string) {
     const usuario = await this.findOne(id, empresaId);
+    const { password, ...valoresAnteriores } = usuario;
     await this.repo.remove(usuario);
+
+    await this.auditoria.registrar(
+      empresaId,
+      'usuarios',
+      id,
+      TipoOperacion.ELIMINAR,
+      usuarioActual || 'sistema',
+      valoresAnteriores,
+      null,
+      `Usuario ${valoresAnteriores.nombre} eliminado`,
+    );
   }
 }

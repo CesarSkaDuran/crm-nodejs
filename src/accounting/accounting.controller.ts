@@ -47,7 +47,7 @@ export class AccountingController {
     @Body() dto: CreateAsentadoDto,
     @CurrentUser() usuario: any,
   ) {
-    return this.accountingService.create(dto, usuario.empresa_id, usuario.name);
+    return this.accountingService.create(dto, usuario.empresa_id, usuario.nombre);
   }
 
   @Roles(UserRole.ADMIN, UserRole.CONTADOR)

@@ -32,7 +32,7 @@ export class UsersController {
     @Body() dto: CreateUserDto,
     @CurrentUser() usuario: any,
   ) {
-    return this.usersService.create(dto, usuario.empresa_id);
+    return this.usersService.create(dto, usuario.empresa_id, usuario.nombre);
   }
 
   @Get()
@@ -55,7 +55,7 @@ export class UsersController {
     @Body() dto: UpdateUserDto,
     @CurrentUser() usuario: any,
   ) {
-    return this.usersService.update(id, usuario.empresa_id, dto);
+    return this.usersService.update(id, usuario.empresa_id, dto, usuario.nombre);
   }
 
   @Delete(':id')
@@ -64,6 +64,6 @@ export class UsersController {
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() usuario: any,
   ) {
-    return this.usersService.remove(id, usuario.empresa_id);
+    return this.usersService.remove(id, usuario.empresa_id, usuario.nombre);
   }
 }

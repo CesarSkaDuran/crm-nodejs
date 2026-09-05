@@ -55,6 +55,9 @@ export class User {
   @Column({ type: 'tinyint', default: 1 })
   estado: number;
 
+  @Column({ type: 'longtext', nullable: true })
+  foto?: string;
+
   @CreateDateColumn()
   created_at: Date;
 

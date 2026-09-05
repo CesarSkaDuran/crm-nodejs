@@ -44,4 +44,12 @@ export class CreateUserDto {
   @IsInt()
   @IsOptional()
   estado?: number;
+
+  @ApiPropertyOptional({
+    example: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA...',
+    description: 'Foto del usuario en base64',
+  })
+  @IsString()
+  @IsOptional()
+  foto?: string;
 }

@@ -58,7 +58,7 @@ export class CarteraController {
     @Body() dto: CreateCreditoDto,
     @CurrentUser() usuario: any,
   ) {
-    return this.carteraService.crearCredito(dto, usuario.empresa_id, usuario.name);
+    return this.carteraService.crearCredito(dto, usuario.empresa_id, usuario.nombre);
   }
 
   @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
@@ -67,7 +67,7 @@ export class CarteraController {
     @Body() dto: RegistrarCobroDto,
     @CurrentUser() usuario: any,
   ) {
-    return this.carteraService.cobrar(dto, usuario.empresa_id, usuario.name);
+    return this.carteraService.cobrar(dto, usuario.empresa_id, usuario.nombre);
   }
 
   @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)

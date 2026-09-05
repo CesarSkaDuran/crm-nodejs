@@ -26,6 +26,9 @@ import {
 } from '../accounting/accounting-helpers';
 import { CarteraService } from '../cartera/cartera.service';
 import { PeriodoCredito, TipoCredito } from '../cartera/entities/credito.entity';
+import { CierresService } from '../cierres/cierres.service';
+import { AuditoriaService } from '../auditoria/auditoria.service';
+import { TipoOperacion } from '../auditoria/entities/auditoria.entity';
 
 const TIPO_ASIENTO_VENTA = 2;
 
@@ -37,6 +40,8 @@ export class SalesService {
     @InjectDataSource()
     private readonly dataSource: DataSource,
     private readonly carteraService: CarteraService,
+    private readonly cierresService: CierresService,
+    private readonly auditoria: AuditoriaService,
   ) {}
 
   private async obtenerConsecutivoAtomico(
@@ -58,6 +63,17 @@ export class SalesService {
   }
 
   async create(dto: CreateSaleDto, empresaId: number, usuario: string) {
+    // Validar que el período no esté cerrado
+    const periodoCerrado = await this.cierresService.bloquearTransaccionesEnPeriodoCerrado(
+      empresaId,
+      dto.fecha,
+    );
+    if (periodoCerrado) {
+      throw new BadRequestException(
+        `No se pueden crear ventas en un período cerrado. Fecha: ${dto.fecha}`,
+      );
+    }
+
     return this.dataSource.transaction(async (manager) => {
       const ventaRepo = manager.getRepository(Sale);
       const detalleRepo = manager.getRepository(SaleDetail);
@@ -691,6 +707,17 @@ export class SalesService {
       // 4. Marcar venta como anulada
       venta.estado = 0;
       await ventaRepo.save(venta);
+
+      await this.auditoria.registrar(
+        empresaId,
+        'ventas',
+        venta.id,
+        TipoOperacion.ANULAR,
+        usuario,
+        { estado: 1 },
+        { estado: 0 },
+        `Venta ${venta.codigo} anulada`,
+      );
 
       return {
         ok: true,

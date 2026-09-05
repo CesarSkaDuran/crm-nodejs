@@ -7,11 +7,15 @@ import { PurchaseDetail } from './entities/purchase-detail.entity';
 import { Banco } from '../bancos/entities/banco.entity';
 import { Account } from '../accounts/entities/account.entity';
 import { CuentasPorPagarModule } from '../cuentas-por-pagar/cuentas-por-pagar.module';
+import { CierresModule } from '../cierres/cierres.module';
+import { AuditoriaModule } from '../auditoria/auditoria.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Purchase, PurchaseDetail, Banco, Account]),
     CuentasPorPagarModule,
+    CierresModule,
+    AuditoriaModule,
   ],
   controllers: [PurchasesController],
   providers: [PurchasesService],

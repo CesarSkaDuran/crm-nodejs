@@ -29,7 +29,7 @@ export class InventarioFisicoController {
     @Body() dto: CreateInventarioDto,
     @CurrentUser() usuario: any,
   ) {
-    return this.service.crear(dto, usuario.empresa_id, usuario.name);
+    return this.service.crear(dto, usuario.empresa_id, usuario.nombre);
   }
 
   @Get()
@@ -82,7 +82,7 @@ export class InventarioFisicoController {
     @Body() dto: FinalizarInventarioDto,
     @CurrentUser() usuario: any,
   ) {
-    return this.service.finalizar(id, dto, usuario.empresa_id, usuario.name);
+    return this.service.finalizar(id, dto, usuario.empresa_id, usuario.nombre);
   }
 
   @Roles(UserRole.ADMIN, UserRole.CONTADOR)

@@ -40,6 +40,7 @@ export class ProductsService {
       if (cat) dto.categoria = cat.nombre;
     }
     this.recalcularPrecios(dto as any);
+    await this.asignarCuentasPorDefecto(dto as any, empresaId);
     const producto = this.repo.create({ ...dto, empresa_id: empresaId });
     return this.repo.save(producto);
   }
@@ -89,7 +90,16 @@ export class ProductsService {
     // Combinar valores actuales con el DTO para poder recalcular
     const merged: Partial<Product> = { ...producto, ...dto };
     this.recalcularPrecios(merged);
+    await this.asignarCuentasPorDefecto(merged, empresaId);
     Object.assign(producto, merged);
+    // `findOne` carga las relaciones (cuenta_inventarios, cuenta_costos,
+    // cuenta_ingresos) junto con sus columnas *_id. Si dejamos los objetos
+    // de relación desactualizados, TypeORM los usa para resolver la FK al
+    // guardar y termina sobrescribiendo el *_id nuevo con el id de la
+    // relación vieja. Los eliminamos para que solo se use la columna *_id.
+    delete (producto as any).cuenta_inventarios;
+    delete (producto as any).cuenta_costos;
+    delete (producto as any).cuenta_ingresos;
     return this.repo.save(producto);
   }
 
@@ -136,6 +146,60 @@ export class ProductsService {
     // Margen sobre el precio de venta: (1 - precioCompra/pvp) * 100
     const margen = (1 - Number(precioCompra) / Number(pvp)) * 100;
     return Math.round(margen * 100) / 100;
+  }
+
+  /**
+   * Asigna cuentas contables por defecto si el producto no las trae.
+   * Busca en el PUC por palabras clave relacionadas con inventarios,
+   * costos de venta e ingresos por venta.
+   */
+  private async asignarCuentasPorDefecto(producto: Partial<Product>, empresaId: number) {
+    const cuentas = await this.accountRepo.find({
+      where: { empresa_id: empresaId, estado: 1 },
+    });
+    if (!cuentas.length) return;
+
+    const categoriaLower = (producto.categoria || '').toLowerCase();
+    const tipo = producto.tipo ?? 1;
+
+    // Inventarios (solo para productos)
+    if (tipo === 1 && !producto.cuenta_inventarios_id) {
+      const inv = this.buscarCuenta(cuentas, [
+        'inventario',
+        'mercancia',
+        'existencia',
+        'activo corriente',
+        '1105',
+        '11',
+        categoriaLower,
+      ]);
+      if (inv) producto.cuenta_inventarios_id = inv.id;
+    }
+
+    // Costos (solo para productos)
+    if (tipo === 1 && !producto.cuenta_costos_id) {
+      const costo = this.buscarCuenta(cuentas, [
+        'costo de venta',
+        'costos de ventas',
+        'costo',
+        '61',
+        categoriaLower,
+      ]);
+      if (costo) producto.cuenta_costos_id = costo.id;
+    }
+
+    // Ingresos (productos y servicios)
+    if (!producto.cuenta_ingresos_id) {
+      const ingreso = this.buscarCuenta(cuentas, [
+        'ingreso',
+        'venta',
+        'ingresos por venta',
+        'ingresos operacionales',
+        '41',
+        categoriaLower,
+      ]);
+      if (ingreso) producto.cuenta_ingresos_id = ingreso.id;
+    }
   }
 
   private recalcularPrecios(producto: Partial<Product>) {
@@ -302,37 +366,70 @@ export class ProductsService {
   private buscarCuenta(cuentas: Account[], keywords: string[]) {
     // Filtramos keywords vacíos/nulos y evitamos que valores muy cortos
     // (ej. IDs de categoría convertidos a string como "1", "2") colapsen
-    // accidentalmente en cuentas raíz del PUC (ej. "1" = ACTIVO) al usar
-    // codigo.startsWith(k). Solo se permite el match por código cuando el
-    // keyword tiene al menos 2 caracteres (un prefijo real de código PUC).
+    // accidentalmente en cuentas raíz del PUC.
     const limpios = (keywords || [])
       .map((k) => (k ?? '').toString().toLowerCase().trim())
       .filter((k) => k.length > 0);
 
-    const coincide = (c: Account) =>
-      limpios.some(
-        (k) =>
-          c.nombre.toLowerCase().includes(k) ||
-          (k.length >= 2 && c.codigo.toLowerCase().startsWith(k)),
-      );
-    const coincidePorCodigo = (c: Account) =>
-      limpios.some((k) => k.length >= 2 && c.codigo.toLowerCase().startsWith(k));
+    if (!limpios.length) return undefined;
 
-    // Preferimos SIEMPRE cuentas hoja (clasificacion 4 = auxiliar), ya que
-    // son las únicas que deben recibir movimientos contables directos. Las
-    // cuentas de clase/grupo/cuenta (1,2,3) suelen tener nombres genéricos
-    // (ej. "INGRESOS", "COSTOS DE VENTA") que coinciden por texto con las
-    // mismas palabras clave, causando que se sugiera por error una cuenta
-    // de agrupación en vez de una auxiliar.
-    const hojas = cuentas.filter((c) => Number(c.clasificacion) === 4);
-    const noHojas = cuentas.filter((c) => Number(c.clasificacion) !== 4);
+    const palabras = (nombre: string) =>
+      nombre.toLowerCase().split(/[^a-z0-9áéíóúñ]+/).filter((w) => w.length > 0);
 
-    return (
-      hojas.find(coincide) ||
-      hojas.find(coincidePorCodigo) ||
-      noHojas.find(coincide) ||
-      noHojas.find(coincidePorCodigo)
-    );
+    let mejor: { cuenta: Account; score: number } | null = null;
+
+    for (const c of cuentas) {
+      // Solo usamos cuentas hoja (clasificacion 4 = auxiliar), salvo que no
+      // haya ninguna hoja y una no-hoja tenga un match muy fuerte por código.
+      const esHoja = Number(c.clasificacion) === 4;
+
+      let score = 0;
+      const words = palabras(c.nombre);
+
+      for (const k of limpios) {
+        const nombreLower = c.nombre.toLowerCase();
+        const codigoLower = c.codigo.toLowerCase();
+
+        // Coincidencia exacta de palabra completa (mayor prioridad)
+        if (words.some((w) => w === k)) {
+          score += esHoja ? 100 : 40;
+        }
+        // Palabra que empiece con la keyword (ej. "ingreso" -> "ingresos")
+        else if (words.some((w) => w.startsWith(k) && w.length <= k.length + 3)) {
+          score += esHoja ? 70 : 30;
+        }
+        // Nombre empieza con la keyword
+        else if (nombreLower.startsWith(k)) {
+          score += esHoja ? 80 : 35;
+        }
+        // El nombre contiene la keyword pero no como palabra completa
+        // (menor prioridad, evita matches accidentales como "retenciones sobre ingresos")
+        else if (nombreLower.includes(k)) {
+          score += esHoja ? 15 : 5;
+        }
+
+        // Coincidencia por código PUC
+        if (k.length >= 2) {
+          if (codigoLower.startsWith(k)) {
+            score += esHoja ? 60 : 20;
+          } else if (codigoLower.includes(k)) {
+            score += esHoja ? 10 : 2;
+          }
+        }
+      }
+
+      // Penalizar fuertemente cuentas de agrupación que no sean hoja
+      if (!esHoja) {
+        score -= 25;
+      }
+
+      if (score > 0 && (!mejor || score > mejor.score)) {
+        mejor = { cuenta: c, score };
+      }
+    }
+
+    // Solo devolvemos si el score es razonable (evita matches débiles)
+    return mejor && mejor.score >= 30 ? mejor.cuenta : undefined;
   }
 
   async sugerirCuentas(tipo: number, categoria: string, empresaId: number) {

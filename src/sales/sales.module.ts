@@ -5,9 +5,16 @@ import { SalesService } from './sales.service';
 import { Sale } from './entities/sale.entity';
 import { SaleDetail } from './entities/sale-detail.entity';
 import { CarteraModule } from '../cartera/cartera.module';
+import { CierresModule } from '../cierres/cierres.module';
+import { AuditoriaModule } from '../auditoria/auditoria.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Sale, SaleDetail]), CarteraModule],
+  imports: [
+    TypeOrmModule.forFeature([Sale, SaleDetail]),
+    CarteraModule,
+    CierresModule,
+    AuditoriaModule,
+  ],
   controllers: [SalesController],
   providers: [SalesService],
   exports: [SalesService],

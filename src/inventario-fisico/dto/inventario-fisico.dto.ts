@@ -1,5 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsDateString, IsOptional, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  IsArray,
+  IsDateString,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  ValidateNested,
+} from 'class-validator';
 
 export class CreateInventarioDto {
   @ApiProperty({ example: '2026-08-28' })
@@ -14,14 +23,19 @@ export class CreateInventarioDto {
 
 export class RegistrarConteoDto {
   @ApiProperty({ example: 1 })
+  @IsInt()
   producto_id: number;
 
   @ApiProperty({ example: 50, description: 'Cantidad contada físicamente' })
+  @IsNumber()
   conteo: number;
 }
 
 export class ConsolidarInventarioDto {
-  @ApiProperty({ type: 'array', description: 'Lista de conteos' })
+  @ApiProperty({ type: () => RegistrarConteoDto, isArray: true, description: 'Lista de conteos' })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => RegistrarConteoDto)
   conteos: RegistrarConteoDto[];
 }
 

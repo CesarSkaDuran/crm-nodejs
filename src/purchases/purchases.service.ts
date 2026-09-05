@@ -26,6 +26,9 @@ import {
 } from '../accounting/accounting-helpers';
 import { CuentasPorPagarService } from '../cuentas-por-pagar/cuentas-por-pagar.service';
 import { PeriodoCredito } from '../cartera/entities/credito.entity';
+import { CierresService } from '../cierres/cierres.service';
+import { AuditoriaService } from '../auditoria/auditoria.service';
+import { TipoOperacion } from '../auditoria/entities/auditoria.entity';
 
 const TIPO_ASIENTO_COMPRA = 1;
 
@@ -37,6 +40,8 @@ export class PurchasesService {
     @InjectDataSource()
     private readonly dataSource: DataSource,
     private readonly cxpService: CuentasPorPagarService,
+    private readonly cierresService: CierresService,
+    private readonly auditoria: AuditoriaService,
   ) {}
 
   private async obtenerConsecutivoAtomico(
@@ -58,6 +63,17 @@ export class PurchasesService {
   }
 
   async create(dto: CreatePurchaseDto, empresaId: number, usuario: string) {
+    // Validar que el período no esté cerrado
+    const periodoCerrado = await this.cierresService.bloquearTransaccionesEnPeriodoCerrado(
+      empresaId,
+      dto.fecha,
+    );
+    if (periodoCerrado) {
+      throw new BadRequestException(
+        `No se pueden crear compras en un período cerrado. Fecha: ${dto.fecha}`,
+      );
+    }
+
     return this.dataSource.transaction(async (manager) => {
       const compraRepo = manager.getRepository(Purchase);
       const detalleRepo = manager.getRepository(PurchaseDetail);
@@ -707,6 +723,17 @@ export class PurchasesService {
       // 3. Marcar compra como anulada
       compra.estado = 0;
       await compraRepo.save(compra);
+
+      await this.auditoria.registrar(
+        empresaId,
+        'compras',
+        compra.id,
+        TipoOperacion.ANULAR,
+        usuario,
+        { estado: 1 },
+        { estado: 0 },
+        `Compra ${compra.codigo} anulada`,
+      );
 
       return {
         ok: true,

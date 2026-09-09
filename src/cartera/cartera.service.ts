@@ -59,6 +59,20 @@ export class CarteraService {
       qb.andWhere('cr.tercero_id = :terceroId', { terceroId: query.tercero_id });
     }
 
+    if (query.search) {
+      qb.andWhere('(t.nombre LIKE :search OR t.documento LIKE :search)', {
+        search: `%${query.search}%`,
+      });
+    }
+
+    // Totales globales (sin paginación)
+    const resumen = await qb
+      .clone()
+      .select('COALESCE(SUM(cr.saldo), 0)', 'saldo_total')
+      .addSelect('COUNT(DISTINCT cr.tercero_id)', 'terceros')
+      .orderBy()
+      .getRawOne();
+
     qb.orderBy('t.nombre', 'ASC').skip((page - 1) * limit).take(limit);
 
     const [creditos, total] = await qb.getManyAndCount();
@@ -116,7 +130,16 @@ export class CarteraService {
 
     const data = Array.from(mapa.values());
 
-    return { data, total, page, limit };
+    return {
+      data,
+      total,
+      page,
+      limit,
+      resumen: {
+        saldo_total: round2(Number(resumen?.saldo_total) || 0),
+        terceros: Number(resumen?.terceros) || 0,
+      },
+    };
   }
 
   // ============ DETALLE DE UN TERCERO (todos sus créditos y cuotas) ============

@@ -30,6 +30,9 @@ import { CierresModule } from './cierres/cierres.module';
 import { ReportesModule } from './reportes/reportes.module';
 import { AuditoriaModule } from './auditoria/auditoria.module';
 import { ValidacionesModule } from './validaciones/validaciones.module';
+import { TiposTerceroModule } from './tipos-tercero/tipos-tercero.module';
+import { ImpuestosModule } from './impuestos/impuestos.module';
+import { UnidadesMedidaModule } from './unidades-medida/unidades-medida.module';
 
 @Module({
   imports: [
@@ -79,6 +82,9 @@ import { ValidacionesModule } from './validaciones/validaciones.module';
     ReportesModule,
     AuditoriaModule,
     ValidacionesModule,
+    TiposTerceroModule,
+    ImpuestosModule,
+    UnidadesMedidaModule,
   ],
   controllers: [AppController],
   providers: [AppService],

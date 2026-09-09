@@ -6,6 +6,7 @@ import {
   Param,
   UseGuards,
   ParseIntPipe,
+  Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PurchasesService } from './purchases.service';
@@ -37,8 +38,11 @@ export class PurchasesController {
   }
 
   @Get()
-  findAll(@CurrentUser() usuario: any) {
-    return this.purchasesService.findAll(usuario.empresa_id);
+  findAll(
+    @CurrentUser() usuario: any,
+    @Query() query: any,
+  ) {
+    return this.purchasesService.findAll(query, usuario.empresa_id);
   }
 
   @Get(':id')

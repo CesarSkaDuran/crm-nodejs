@@ -6,6 +6,7 @@ import {
   Param,
   UseGuards,
   ParseIntPipe,
+  Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { SalesService } from './sales.service';
@@ -33,8 +34,11 @@ export class SalesController {
   }
 
   @Get()
-  findAll(@CurrentUser() usuario: any) {
-    return this.salesService.findAll(usuario.empresa_id);
+  findAll(
+    @CurrentUser() usuario: any,
+    @Query() query: any,
+  ) {
+    return this.salesService.findAll(query, usuario.empresa_id);
   }
 
   @Get(':id')

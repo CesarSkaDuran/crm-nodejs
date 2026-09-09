@@ -544,12 +544,39 @@ export class SalesService {
     });
   }
 
-  findAll(empresaId: number) {
-    return this.ventaRepo.find({
-      where: { empresa_id: empresaId },
-      relations: ['cliente'],
-      order: { fecha: 'DESC', id: 'DESC' },
-    });
+  async findAll(query: any, empresaId: number) {
+    const page = Math.max(1, Number(query.page || 1));
+    const limit = Math.min(200, Math.max(1, Number(query.limit || 10)));
+
+    const qb = this.ventaRepo
+      .createQueryBuilder('v')
+      .leftJoinAndSelect('v.cliente', 'cliente')
+      .where('v.empresa_id = :empresaId', { empresaId })
+      .orderBy('v.fecha', 'DESC')
+      .addOrderBy('v.id', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    if (query.search) {
+      qb.andWhere(
+        '(v.numero_factura LIKE :search OR v.codigo LIKE :search OR v.observacion LIKE :search OR cliente.nombre LIKE :search)',
+        { search: `%${query.search}%` },
+      );
+    }
+
+    if (query.date && query.date2) {
+      qb.andWhere('v.fecha BETWEEN :date AND :date2', {
+        date: query.date,
+        date2: `${query.date2} 23:59:59`,
+      });
+    } else if (query.date) {
+      qb.andWhere('v.fecha >= :date', { date: query.date });
+    } else if (query.date2) {
+      qb.andWhere('v.fecha <= :date2', { date2: `${query.date2} 23:59:59` });
+    }
+
+    const [data, total] = await qb.getManyAndCount();
+    return { data, total, page, limit };
   }
 
   async findOne(id: number, empresaId: number) {

@@ -1,11 +1,20 @@
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ValidationPipe, BadRequestException } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { join } from 'path';
+import { mkdirSync } from 'fs';
+import { json, urlencoded } from 'express';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  const uploadsPath = join(process.cwd(), 'uploads');
+  mkdirSync(join(uploadsPath, 'usuarios'), { recursive: true });
+  mkdirSync(join(uploadsPath, 'productos'), { recursive: true });
+  app.useStaticAssets(uploadsPath, { prefix: '/uploads/' });
 
   app.setGlobalPrefix('api/v1');
   app.enableCors();
@@ -25,6 +34,9 @@ async function bootstrap() {
   );
 
   app.useGlobalFilters(new AllExceptionsFilter());
+
+  app.use(json({ limit: '10mb' }));
+  app.use(urlencoded({ extended: true, limit: '10mb' }));
 
   const config = new DocumentBuilder()
     .setTitle('CRM API')

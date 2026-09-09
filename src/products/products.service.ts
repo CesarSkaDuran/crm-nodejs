@@ -4,6 +4,8 @@ import {
   ConflictException,
   BadRequestException,
 } from '@nestjs/common';
+import { existsSync, unlink } from 'fs';
+import { join } from 'path';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, Not } from 'typeorm';
 import { Product } from './entities/product.entity';
@@ -23,14 +25,49 @@ export class ProductsService {
     private readonly categoriaRepo: Repository<Categoria>,
   ) {}
 
+  /**
+   * Genera el siguiente código disponible con formato PDT0001, PDT0002...
+   * Toma el mayor consecutivo existente que empiece por 'PDT' y suma 1,
+   * verificando en un bucle que no exista (evita colisiones).
+   */
+  private async generarCodigo(empresaId: number): Promise<string> {
+    const ultimo = await this.repo
+      .createQueryBuilder('p')
+      .where('p.empresa_id = :empresaId', { empresaId })
+      .andWhere("p.codigo LIKE 'PDT%'")
+      .orderBy('p.codigo', 'DESC')
+      .getOne();
+
+    let consecutivo = 1;
+    if (ultimo?.codigo) {
+      const numero = parseInt(ultimo.codigo.replace(/^PDT/i, ''), 10);
+      if (!isNaN(numero)) consecutivo = numero + 1;
+    }
+
+    let codigo = `PDT${consecutivo.toString().padStart(4, '0')}`;
+    while (
+      await this.repo.findOne({ where: { codigo, empresa_id: empresaId } })
+    ) {
+      consecutivo++;
+      codigo = `PDT${consecutivo.toString().padStart(4, '0')}`;
+    }
+    return codigo;
+  }
+
   async create(dto: CreateProductDto, empresaId: number) {
-    const exists = await this.repo.findOne({
-      where: { codigo: dto.codigo, empresa_id: empresaId },
-    });
-    if (exists) {
-      throw new ConflictException(
-        'El código de producto ya existe en esta empresa',
-      );
+    // Si no viene código, se autogenera
+    if (!dto.codigo?.trim()) {
+      dto.codigo = await this.generarCodigo(empresaId);
+    } else {
+      dto.codigo = dto.codigo.trim();
+      const exists = await this.repo.findOne({
+        where: { codigo: dto.codigo, empresa_id: empresaId },
+      });
+      if (exists) {
+        throw new ConflictException(
+          'El código de producto ya existe en esta empresa',
+        );
+      }
     }
     // Validar que la categoría sea hoja (sin hijos)
     if (dto.categoria_id) {
@@ -45,15 +82,32 @@ export class ProductsService {
     return this.repo.save(producto);
   }
 
-  async findAll(empresaId: number, categoriaId?: number) {
-    const where: any = { empresa_id: empresaId };
-    if (categoriaId) {
-      where.categoria_id = categoriaId;
+  async findAll(query: any, empresaId: number) {
+    const page = Math.max(1, Number(query.page || 1));
+    const limit = Math.min(200, Math.max(1, Number(query.limit || 10)));
+
+    const qb = this.repo
+      .createQueryBuilder('p')
+      .where('p.empresa_id = :empresaId', { empresaId })
+      .orderBy('p.nombre', 'ASC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    if (query.categoria_id) {
+      qb.andWhere('p.categoria_id = :categoriaId', {
+        categoriaId: query.categoria_id,
+      });
     }
-    return this.repo.find({
-      where,
-      order: { nombre: 'ASC' },
-    });
+
+    if (query.search) {
+      qb.andWhere(
+        '(p.nombre LIKE :search OR p.codigo LIKE :search)',
+        { search: `%${query.search}%` },
+      );
+    }
+
+    const [data, total] = await qb.getManyAndCount();
+    return { data, total, page, limit };
   }
 
   async findOne(id: number, empresaId: number) {
@@ -67,8 +121,37 @@ export class ProductsService {
     return producto;
   }
 
+  async updateImagen(
+    id: number,
+    empresaId: number,
+    ruta: string,
+    index: number,
+  ) {
+    const producto = await this.findOne(id, empresaId);
+    const campo: 'imagen1' | 'imagen2' = index === 1 ? 'imagen1' : 'imagen2';
+    const anterior = producto[campo];
+
+    producto[campo] = ruta;
+    const saved = await this.repo.save(producto);
+
+    if (anterior && anterior.startsWith('/uploads/productos/')) {
+      const rutaAnterior = join(process.cwd(), anterior);
+      if (existsSync(rutaAnterior)) {
+        try {
+          unlink(rutaAnterior, () => {});
+        } catch {}
+      }
+    }
+
+    return saved;
+  }
+
   async update(id: number, empresaId: number, dto: UpdateProductDto) {
     const producto = await this.findOne(id, empresaId);
+    // Si llega código vacío, conservar el existente
+    if (dto.codigo !== undefined && !dto.codigo.trim()) {
+      delete dto.codigo;
+    }
     if (dto.codigo && dto.codigo !== producto.codigo) {
       const exists = await this.repo.findOne({
         where: { codigo: dto.codigo, empresa_id: empresaId },

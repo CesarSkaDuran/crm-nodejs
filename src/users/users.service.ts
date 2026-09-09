@@ -6,6 +6,8 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
+import { unlinkSync, existsSync } from 'fs';
+import { join } from 'path';
 import { User } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -100,6 +102,38 @@ export class UsersService {
       valoresAnteriores,
       result,
       `Usuario ${result.nombre} actualizado`,
+    );
+
+    return result;
+  }
+
+  async guardarFoto(id: number, empresaId: number, ruta: string, usuarioActual?: string) {
+    const usuario = await this.findOne(id, empresaId);
+    const fotoAnterior = usuario.foto;
+
+    usuario.foto = ruta;
+    const saved = await this.repo.save(usuario);
+    const { password, ...result } = saved;
+
+    // Eliminar archivo anterior si existía
+    if (fotoAnterior && fotoAnterior.startsWith('/uploads/')) {
+      const rutaAnterior = join(process.cwd(), fotoAnterior);
+      if (existsSync(rutaAnterior)) {
+        try {
+          unlinkSync(rutaAnterior);
+        } catch {}
+      }
+    }
+
+    await this.auditoria.registrar(
+      empresaId,
+      'usuarios',
+      id,
+      TipoOperacion.ACTUALIZAR,
+      usuarioActual || 'sistema',
+      { foto: fotoAnterior },
+      { foto: ruta },
+      `Foto del usuario ${result.nombre} actualizada`,
     );
 
     return result;

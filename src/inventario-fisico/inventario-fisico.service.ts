@@ -107,11 +107,32 @@ export class InventarioFisicoService {
   /**
    * Lista todos los inventarios físicos
    */
-  async findAll(empresaId: number) {
-    return this.invRepo.find({
-      where: { empresa_id: empresaId },
-      order: { id: 'DESC' },
-    });
+  async findAll(query: any, empresaId: number) {
+    const page = Math.max(1, Number(query.page || 1));
+    const limit = Math.min(200, Math.max(1, Number(query.limit || 10)));
+
+    const qb = this.invRepo
+      .createQueryBuilder('i')
+      .where('i.empresa_id = :empresaId', { empresaId })
+      .orderBy('i.id', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    if (query.date && query.date2) {
+      qb.andWhere('i.fecha BETWEEN :date AND :date2', {
+        date: query.date,
+        date2: `${query.date2} 23:59:59`,
+      });
+    } else if (query.date) {
+      qb.andWhere('i.fecha >= :date', { date: query.date });
+    } else if (query.date2) {
+      qb.andWhere('i.fecha <= :date2', {
+        date2: `${query.date2} 23:59:59`,
+      });
+    }
+
+    const [data, total] = await qb.getManyAndCount();
+    return { data, total, page, limit };
   }
 
   /**

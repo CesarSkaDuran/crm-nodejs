@@ -86,22 +86,40 @@ export class AllExceptionsFilter implements ExceptionFilter {
     // 2. Errores de TypeORM
     if (exception instanceof QueryFailedError) {
       const code = (exception as any).errno || (exception as any).code;
-      const sqlMessage = exception.message || '';
+      const sqlMessage: string = exception.message || '';
 
       // Duplicado (código 1062 en MySQL)
       if (code === 1062 || sqlMessage.includes('Duplicate')) {
+        const valor = this.extraerValorDuplicado(sqlMessage);
         return {
           statusCode: HttpStatus.CONFLICT,
-          message: 'El registro ya existe (valor duplicado).',
+          message: valor
+            ? `El registro ya existe: el valor "${valor}" está duplicado.`
+            : 'El registro ya existe (valor duplicado).',
           error: 'Conflict',
         };
       }
 
-      // Violación de FK (código 1452 en MySQL)
+      // No se puede borrar/actualizar: tiene registros dependientes (1451)
+      if (code === 1451) {
+        const dependencia = this.extraerTablaDependiente(sqlMessage);
+        return {
+          statusCode: HttpStatus.CONFLICT,
+          message: dependencia
+            ? `No se puede eliminar porque tiene ${dependencia} asociados. Desactívalo o anula esos registros primero.`
+            : 'No se puede eliminar porque tiene registros asociados. Desactívalo o anula esos registros primero.',
+          error: 'Conflict',
+        };
+      }
+
+      // Violación de FK: referencia a un registro inexistente (1452)
       if (code === 1452 || sqlMessage.includes('FOREIGN KEY')) {
+        const dependencia = this.extraerTablaDependiente(sqlMessage);
         return {
           statusCode: HttpStatus.BAD_REQUEST,
-          message: 'No se puede guardar porque depende de otro registro que no existe.',
+          message: dependencia
+            ? `No se puede guardar: el registro relacionado en "${dependencia}" no existe.`
+            : 'No se puede guardar porque depende de otro registro que no existe.',
           error: 'Bad Request',
         };
       }
@@ -139,6 +157,49 @@ export class AllExceptionsFilter implements ExceptionFilter {
       message: 'Error interno del servidor.',
       error: 'Internal Server Error',
     };
+  }
+
+  /**
+   * Extrae el nombre amigable de la tabla dependiente desde un mensaje
+   * de error de MySQL (FK), ej:
+   *   "a foreign key constraint fails (`crm_db`.`ventas`, CONSTRAINT ...)"
+   * Retorna el nombre traducido del módulo dependiente, o null.
+   */
+  private extraerTablaDependiente(sqlMessage: string): string | null {
+    const tablas = [...sqlMessage.matchAll(/`[^`]+`\.`([^`]+)`/g)].map(
+      (m) => m[1],
+    );
+    if (tablas.length === 0) return null;
+    // En errores FK, MySQL menciona la tabla HIJA (la que depende del registro)
+    const tablaDependiente = tablas[0];
+
+    const nombres: Record<string, string> = {
+      kardex: 'movimientos de inventario (Kardex)',
+      ventas: 'ventas',
+      detalle_ventas: 'detalles de venta',
+      compras: 'compras',
+      detalle_compras: 'detalles de compra',
+      asientos: 'asientos contables',
+      asiento_detalles: 'detalles de asientos contables',
+      cartera: 'registros de cartera',
+      cartera_cuotas: 'cuotas de cartera',
+      cuentas_por_pagar: 'cuentas por pagar',
+      terceros: 'terceros',
+      productos: 'productos',
+      tesoreria: 'movimientos de tesorería',
+      bancos: 'bancos',
+      conciliaciones: 'conciliaciones bancarias',
+      usuarios: 'usuarios',
+      facturas_electronicas: 'facturas electrónicas',
+    };
+
+    return nombres[tablaDependiente] ?? `registros de "${tablaDependiente}"`;
+  }
+
+  /** Extrae el valor duplicado de "Duplicate entry 'X' for key 'Y'" */
+  private extraerValorDuplicado(sqlMessage: string): string | null {
+    const m = sqlMessage.match(/Duplicate entry '([^']+)'/);
+    return m ? m[1] : null;
   }
 
   private httpStatusText(status: number): string {

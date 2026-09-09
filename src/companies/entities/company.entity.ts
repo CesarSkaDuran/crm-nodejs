@@ -35,6 +35,24 @@ export class Company {
   @Column({ nullable: true })
   ciudad: string;
 
+  @Column({ nullable: true, default: 'Colombia' })
+  pais: string;
+
+  @Column({ nullable: true })
+  regimen: string;
+
+  @Column({ type: 'text', nullable: true })
+  obligaciones: string;
+
+  @Column({ nullable: true })
+  logo: string;
+
+  @Column({ nullable: true, default: '#1e40af' })
+  color_primario: string;
+
+  @Column({ nullable: true, default: '#f8fafc' })
+  color_secundario: string;
+
   @Column({ type: 'tinyint', default: 1 })
   estado: number;
 

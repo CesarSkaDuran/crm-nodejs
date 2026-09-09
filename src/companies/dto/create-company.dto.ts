@@ -43,6 +43,36 @@ export class CreateCompanyDto {
   @IsOptional()
   ciudad?: string;
 
+  @ApiPropertyOptional({ example: 'Colombia' })
+  @IsString()
+  @IsOptional()
+  pais?: string;
+
+  @ApiPropertyOptional({ example: 'Responsable de IVA' })
+  @IsString()
+  @IsOptional()
+  regimen?: string;
+
+  @ApiPropertyOptional({ example: 'IVA, Retención en la fuente, ICA' })
+  @IsString()
+  @IsOptional()
+  obligaciones?: string;
+
+  @ApiPropertyOptional({ example: '/uploads/empresas/logo-1.png' })
+  @IsString()
+  @IsOptional()
+  logo?: string;
+
+  @ApiPropertyOptional({ example: '#1e40af' })
+  @IsString()
+  @IsOptional()
+  color_primario?: string;
+
+  @ApiPropertyOptional({ example: '#f8fafc' })
+  @IsString()
+  @IsOptional()
+  color_secundario?: string;
+
   @ApiPropertyOptional({ example: 1, description: 'ID de la moneda por defecto de la empresa' })
   @IsInt()
   @IsOptional()

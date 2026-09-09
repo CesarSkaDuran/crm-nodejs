@@ -6,6 +6,7 @@ import {
   Param,
   UseGuards,
   ParseIntPipe,
+  Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { InventarioFisicoService } from './inventario-fisico.service';
@@ -33,8 +34,17 @@ export class InventarioFisicoController {
   }
 
   @Get()
-  findAll(@CurrentUser() usuario: any) {
-    return this.service.findAll(usuario.empresa_id);
+  findAll(
+    @CurrentUser() usuario: any,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('date') date?: string,
+    @Query('date2') date2?: string,
+  ) {
+    return this.service.findAll(
+      { page, limit, date, date2 },
+      usuario.empresa_id,
+    );
   }
 
   @Get('pendiente')

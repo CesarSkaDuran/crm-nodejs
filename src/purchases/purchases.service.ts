@@ -518,12 +518,39 @@ export class PurchasesService {
     });
   }
 
-  findAll(empresaId: number) {
-    return this.compraRepo.find({
-      where: { empresa_id: empresaId },
-      relations: ['proveedor'],
-      order: { fecha: 'DESC', id: 'DESC' },
-    });
+  async findAll(query: any, empresaId: number) {
+    const page = Math.max(1, Number(query.page || 1));
+    const limit = Math.min(200, Math.max(1, Number(query.limit || 10)));
+
+    const qb = this.compraRepo
+      .createQueryBuilder('c')
+      .leftJoinAndSelect('c.proveedor', 'proveedor')
+      .where('c.empresa_id = :empresaId', { empresaId })
+      .orderBy('c.fecha', 'DESC')
+      .addOrderBy('c.id', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    if (query.search) {
+      qb.andWhere(
+        '(c.numero_factura LIKE :search OR c.codigo LIKE :search OR c.observacion LIKE :search OR proveedor.nombre LIKE :search)',
+        { search: `%${query.search}%` },
+      );
+    }
+
+    if (query.date && query.date2) {
+      qb.andWhere('c.fecha BETWEEN :date AND :date2', {
+        date: query.date,
+        date2: `${query.date2} 23:59:59`,
+      });
+    } else if (query.date) {
+      qb.andWhere('c.fecha >= :date', { date: query.date });
+    } else if (query.date2) {
+      qb.andWhere('c.fecha <= :date2', { date2: `${query.date2} 23:59:59` });
+    }
+
+    const [data, total] = await qb.getManyAndCount();
+    return { data, total, page, limit };
   }
 
   async findOne(id: number, empresaId: number) {

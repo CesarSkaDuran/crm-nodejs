@@ -45,10 +45,22 @@ export class ThirdsController {
   findAll(
     @CurrentUser() usuario: any,
     @Query('tipo_terceros') tipoTerceros?: string,
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('date') date?: string,
+    @Query('date2') date2?: string,
   ) {
     return this.thirdsService.findAll(
+      {
+        tipo_terceros: tipoTerceros,
+        search,
+        page,
+        limit,
+        date,
+        date2,
+      },
       usuario.empresa_id,
-      tipoTerceros ? Number(tipoTerceros) : undefined,
     );
   }
 

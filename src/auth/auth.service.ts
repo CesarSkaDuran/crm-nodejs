@@ -36,6 +36,7 @@ export class AuthService {
         'rol',
         'estado',
         'nombre',
+        'foto',
       ],
     });
 
@@ -67,6 +68,7 @@ export class AuthService {
         nombre: usuario.nombre,
         email: usuario.email,
         rol: usuario.rol,
+        foto: usuario.foto,
       },
     };
   }

@@ -126,14 +126,47 @@ export class ThirdsService {
     return this.repo.save(tercero);
   }
 
-  findAll(empresaId: number, tipoTerceros?: number) {
-    const where: any = { empresa_id: empresaId };
-    if (tipoTerceros) where.tipo_terceros = tipoTerceros;
-    return this.repo.find({
-      where,
-      relations: ['cuenta_contable'],
-      order: { nombre: 'ASC' },
-    });
+  async findAll(query: any, empresaId: number) {
+    const page = Math.max(1, Number(query.page || 1));
+    const limit = Math.min(200, Math.max(1, Number(query.limit || 10)));
+    const tipoTerceros = query.tipo_terceros
+      ? Number(query.tipo_terceros)
+      : undefined;
+
+    const qb = this.repo
+      .createQueryBuilder('t')
+      .leftJoinAndSelect('t.cuenta_contable', 'cuenta_contable')
+      .where('t.empresa_id = :empresaId', { empresaId })
+      .orderBy('t.nombre', 'ASC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    if (tipoTerceros) {
+      qb.andWhere('t.tipo_terceros = :tipoTerceros', { tipoTerceros });
+    }
+
+    if (query.search) {
+      qb.andWhere(
+        '(t.nombre LIKE :search OR t.documento LIKE :search)',
+        { search: `%${query.search}%` },
+      );
+    }
+
+    if (query.date && query.date2) {
+      qb.andWhere('t.created_at BETWEEN :date AND :date2', {
+        date: query.date,
+        date2: `${query.date2} 23:59:59`,
+      });
+    } else if (query.date) {
+      qb.andWhere('t.created_at >= :date', { date: query.date });
+    } else if (query.date2) {
+      qb.andWhere('t.created_at <= :date2', {
+        date2: `${query.date2} 23:59:59`,
+      });
+    }
+
+    const [data, total] = await qb.getManyAndCount();
+    return { data, total, page, limit };
   }
 
   async findOne(id: number, empresaId: number) {

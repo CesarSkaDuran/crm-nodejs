@@ -46,8 +46,8 @@ export class CreateUserDto {
   estado?: number;
 
   @ApiPropertyOptional({
-    example: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA...',
-    description: 'Foto del usuario en base64',
+    example: '/uploads/usuarios/1-1699999999999.jpg',
+    description: 'Ruta de la foto del usuario (se asigna al subir el archivo)',
   })
   @IsString()
   @IsOptional()

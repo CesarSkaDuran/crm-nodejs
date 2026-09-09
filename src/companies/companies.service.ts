@@ -53,4 +53,17 @@ export class CompaniesService {
     const empresa = await this.findOne(id);
     await this.repo.remove(empresa);
   }
+
+  async guardarLogo(id: number, ruta: string) {
+    const empresa = await this.findOne(id);
+    // Eliminar logo anterior si existe
+    if (empresa.logo) {
+      const fs = await import('fs');
+      const path = await import('path');
+      const rutaAnterior = path.join(process.cwd(), empresa.logo);
+      fs.promises.unlink(rutaAnterior).catch(() => {});
+    }
+    empresa.logo = ruta;
+    return this.repo.save(empresa);
+  }
 }

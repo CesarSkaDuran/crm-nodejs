@@ -9,10 +9,10 @@ import {
 } from 'class-validator';
 
 export class CreateProductDto {
-  @ApiProperty({ example: 'PDT0001' })
+  @ApiPropertyOptional({ example: 'PDT0001', description: 'Si se omite, se genera automáticamente (PDT0001, PDT0002, ...)' })
   @IsString()
-  @IsNotEmpty()
-  codigo: string;
+  @IsOptional()
+  codigo?: string;
 
   @ApiProperty({ example: 'Reloj Casio MTP-1183' })
   @IsString()

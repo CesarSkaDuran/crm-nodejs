@@ -6,7 +6,7 @@ import { IsDateString, IsOptional } from 'class-validator';
  *
  * Endpoint: GET /api/v1/informes/pyg
  *
- * A diferencia del Balance General, el P&G SÍ usa `date` y `date2` como
+ * A diferencia del Estado de Situación Financiera, el P&G SÍ usa `date` y `date2` como
  * rango de periodo: Ingresos, Costos y Gastos son cuentas de flujo
  * (nominales), no de saldo acumulado.
  */

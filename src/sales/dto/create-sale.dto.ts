@@ -143,6 +143,18 @@ export class CreateSaleDto {
   @Type(() => Number)
   tasa_mora?: number;
 
+  @ApiPropertyOptional({ example: 1, description: 'Id de la moneda (por defecto COP)' })
+  @IsInt()
+  @IsOptional()
+  @Type(() => Number)
+  moneda_id?: number;
+
+  @ApiPropertyOptional({ example: 4100, description: 'TRM del día del documento. Obligatoria si la moneda no es COP; si se omite se usa la registrada.' })
+  @IsNumber()
+  @IsOptional()
+  @Type(() => Number)
+  tasa_cambio?: number;
+
   @ApiProperty({ type: [DetalleVentaDto] })
   @IsArray()
   @ArrayMinSize(1)

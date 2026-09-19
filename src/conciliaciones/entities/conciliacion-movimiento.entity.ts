@@ -45,6 +45,26 @@ export class ConciliacionMovimiento {
   @Column({ nullable: true })
   tesoreria_id: number;
 
+  /** Código DIAN de la forma de pago (ej. 20=cheque, 42=consignación) */
+  @Column({ type: 'tinyint', nullable: true, comment: 'forma de pago (código DIAN)' })
+  forma: number;
+
+  /**
+   * Concepto contable estándar de conciliación:
+   * - 'nota_debito'         = ND bancaria: está en extracto, falta en libros (comisión, GMF)
+   * - 'nota_credito'        = NC bancaria: está en extracto, falta en libros (intereses, abono)
+   * - 'cheque_circulacion'  = cheque girado no cobrado (libro egreso, no en extracto)
+   * - 'consignacion_transito' = consignación en tránsito (libro ingreso, no en extracto)
+   * - 'error_libros'        = partida mal registrada en libros
+   * - 'error_extracto'      = partida errada del banco en extracto
+   */
+  @Column({ type: 'varchar', length: 30, nullable: true })
+  concepto: string;
+
+  /** Cuenta PUC de contrapartida (obligatoria para notas débito/crédito) */
+  @Column({ nullable: true })
+  cuenta_contable_id: number;
+
   @CreateDateColumn()
   created_at: Date;
 

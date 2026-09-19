@@ -11,6 +11,7 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CarteraService } from './cartera.service';
 import { CreateCreditoDto } from './dto/create-credito.dto';
+import { GenerarProvisionDto } from './dto/generar-provision.dto';
 import { RegistrarCobroDto } from './dto/registrar-cobro.dto';
 import { PosfecharCuotaDto } from './dto/posfechar-cuota.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -34,6 +35,11 @@ export class CarteraController {
   @Get('cuotas-vencidas')
   cuotasVencidas(@Query() query: any, @CurrentUser() usuario: any) {
     return this.carteraService.cuotasVencidas(usuario.empresa_id, query);
+  }
+
+  @Get('analisis-vencimiento')
+  analisisVencimiento(@CurrentUser() usuario: any) {
+    return this.carteraService.analisisVencimiento(usuario.empresa_id);
   }
 
   @Get('credito/:creditoId')
@@ -68,6 +74,15 @@ export class CarteraController {
     @CurrentUser() usuario: any,
   ) {
     return this.carteraService.cobrar(dto, usuario.empresa_id, usuario.nombre);
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
+  @Post('asiento-provision')
+  generarAsientoProvision(
+    @Body() dto: GenerarProvisionDto,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.carteraService.generarAsientoProvision(dto, usuario.empresa_id, usuario.nombre);
   }
 
   @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)

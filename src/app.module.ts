@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
@@ -33,10 +34,14 @@ import { ValidacionesModule } from './validaciones/validaciones.module';
 import { TiposTerceroModule } from './tipos-tercero/tipos-tercero.module';
 import { ImpuestosModule } from './impuestos/impuestos.module';
 import { UnidadesMedidaModule } from './unidades-medida/unidades-medida.module';
+import { FormasPagoModule } from './formas-pago/formas-pago.module';
+import { PartidasRecurrentesModule } from './partidas-recurrentes/partidas-recurrentes.module';
+import { TrmModule } from './trm/trm.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    ScheduleModule.forRoot(),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -85,6 +90,9 @@ import { UnidadesMedidaModule } from './unidades-medida/unidades-medida.module';
     TiposTerceroModule,
     ImpuestosModule,
     UnidadesMedidaModule,
+    FormasPagoModule,
+    PartidasRecurrentesModule,
+    TrmModule,
   ],
   controllers: [AppController],
   providers: [AppService],

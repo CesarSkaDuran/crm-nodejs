@@ -36,6 +36,11 @@ export class CuentasPorPagarController {
     return this.service.cuotasVencidas(usuario.empresa_id, query);
   }
 
+  @Get('analisis-vencimiento')
+  analisisVencimiento(@CurrentUser() usuario: any) {
+    return this.service.analisisVencimiento(usuario.empresa_id);
+  }
+
   @Get('credito/:creditoId')
   findCredito(
     @Param('creditoId', ParseIntPipe) creditoId: number,

@@ -40,6 +40,10 @@ export class Tesoreria {
   @Column({ nullable: true })
   banco_id: number;
 
+  /** Código DIAN de la forma de pago (10=efectivo, 20=cheque, 47/48=transferencia, etc.) */
+  @Column({ type: 'tinyint', nullable: true, comment: 'forma de pago (código DIAN)' })
+  forma: number;
+
   /** Id de la cuenta contable de contrapartida (PUC) */
   @Column({ nullable: true })
   cuenta_contrapartida_id: number;

@@ -9,9 +9,13 @@ import { Company } from '../companies/entities/company.entity';
 import { Credito, TipoCredito, PeriodoCredito, EstadoCredito } from './entities/credito.entity';
 import { CuotaCredito, EstadoCuota } from './entities/cuota-credito.entity';
 import { CreateCreditoDto } from './dto/create-credito.dto';
+import { GenerarProvisionDto } from './dto/generar-provision.dto';
 import { RegistrarCobroDto } from './dto/registrar-cobro.dto';
 import { PosfecharCuotaDto } from './dto/posfechar-cuota.dto';
-import { resolveBancoCuenta, round2, assertBalanced } from '../accounting/accounting-helpers';
+import { resolveBancoCuenta, round2, assertBalanced, assertPeriodoAbierto, cuentaDiferenciaCambio, cuentaGastoBancario, requireAccountByKeywords } from '../accounting/accounting-helpers';
+import { Cierre } from '../cierres/entities/cierre.entity';
+import { Sale } from '../sales/entities/sale.entity';
+import { TrmService } from '../trm/trm.service';
 
 const DIAS_POR_PERIODO: Record<number, number> = {
   [PeriodoCredito.SEMANAL]: 7,
@@ -34,6 +38,7 @@ export class CarteraService {
     private readonly cuotaRepo: Repository<CuotaCredito>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    private readonly trmService: TrmService,
   ) {}
 
   // ============ LISTADO DE CARTERA (resumen por tercero) ============
@@ -49,7 +54,11 @@ export class CarteraService {
       .andWhere('cr.tipo_credito IN (:...tipos)', {
         tipos: [TipoCredito.VENTA, TipoCredito.MANUAL],
       })
-      .andWhere('cr.estado != :anulado', { anulado: EstadoCredito.ANULADO });
+      .andWhere('cr.estado != :anulado', { anulado: EstadoCredito.ANULADO })
+      // Créditos manuales solo si el tercero es cliente (tipos 1, 8, 10)
+      .andWhere('(cr.tipo_credito = :venta OR t.tipo_terceros IN (1, 8, 10))', {
+        venta: TipoCredito.VENTA,
+      });
 
     if (query.solo_saldo_positivo) {
       qb.andWhere('cr.saldo > 0');
@@ -76,6 +85,14 @@ export class CarteraService {
     qb.orderBy('t.nombre', 'ASC').skip((page - 1) * limit).take(limit);
 
     const [creditos, total] = await qb.getManyAndCount();
+
+    // Datos de moneda de las facturas origen (USD → tasa y valor extranjero)
+    const docsPorCodigo = await this.mapaDocumentosMoneda(
+      this.creditoRepo.manager,
+      empresaId,
+      TipoCredito.VENTA,
+      creditos.map((c) => c.documento_origen),
+    );
 
     // Agrupar por tercero
     const mapa = new Map<number, any>();
@@ -104,6 +121,8 @@ export class CarteraService {
         numero_cuotas: cr.numero_cuotas,
         periodo: cr.periodo,
         estado: cr.estado,
+        // Datos de moneda (si la factura origen es en USD)
+        ...docsPorCodigo.get(cr.documento_origen || ''),
       });
       entry.saldo_total = round2(entry.saldo_total + Number(cr.saldo));
     }
@@ -142,6 +161,37 @@ export class CarteraService {
     };
   }
 
+  /**
+   * Mapa código de documento → datos de moneda para las facturas origen
+   * en moneda extranjera (las COP no se incluyen).
+   */
+  private async mapaDocumentosMoneda(
+    manager: any,
+    empresaId: number,
+    tipo: TipoCredito,
+    codigos: (string | null)[],
+  ) {
+    const mapa = new Map<string, any>();
+    const lista = [...new Set((codigos || []).filter(Boolean))] as string[];
+    if (lista.length === 0) return mapa;
+
+    if (tipo === TipoCredito.VENTA) {
+      const ventas = await manager.getRepository(Sale).find({
+        where: { empresa_id: empresaId, codigo: In(lista) },
+      });
+      for (const v of ventas) {
+        if (v.moneda_codigo && v.moneda_codigo !== 'COP') {
+          mapa.set(v.codigo, {
+            moneda_codigo: v.moneda_codigo,
+            tasa_cambio: Number(v.tasa_cambio),
+            valor_moneda_extranjera: Number(v.valor_moneda_extranjera),
+          });
+        }
+      }
+    }
+    return mapa;
+  }
+
   // ============ DETALLE DE UN TERCERO (todos sus créditos y cuotas) ============
 
   async findOne(terceroId: number, empresaId: number) {
@@ -164,6 +214,13 @@ export class CarteraService {
 
     const saldoTotal = creditos.reduce((acc, c) => acc + Number(c.saldo), 0);
 
+    const docsMoneda = await this.mapaDocumentosMoneda(
+      this.creditoRepo.manager,
+      empresaId,
+      TipoCredito.VENTA,
+      creditos.map((c) => c.documento_origen),
+    );
+
     // Movimientos contables del tercero
     const movimientos = await this.lineRepo.find({
       where: { empresa_id: empresaId, tercero_id: terceroId },
@@ -181,6 +238,7 @@ export class CarteraService {
       },
       creditos: creditos.map((c) => ({
         ...c,
+        ...docsMoneda.get(c.documento_origen || ''),
         cuotas: c.cuotas?.sort((a, b) => a.numero_cuota - b.numero_cuota),
       })),
       movimientos,
@@ -222,10 +280,38 @@ export class CarteraService {
       });
     }
 
+    // Datos de moneda si la factura origen es en USD
+    let moneda: any = null;
+    if (credito.tipo_credito === TipoCredito.VENTA && credito.documento_origen) {
+      const venta = await this.creditoRepo.manager.getRepository(Sale).findOne({
+        where: { empresa_id: empresaId, codigo: credito.documento_origen },
+      });
+      if (venta && venta.moneda_codigo && venta.moneda_codigo !== 'COP') {
+        const tasaFactura = Number(venta.tasa_cambio) || 0;
+        const trm = await this.trmService.trmActual(empresaId);
+        const tasaHoy = trm.tasa || tasaFactura;
+        moneda = {
+          codigo: venta.moneda_codigo,
+          tasa_factura: tasaFactura,
+          valor_moneda_extranjera: Number(venta.valor_moneda_extranjera) || 0,
+          tasa_hoy: tasaHoy,
+          trm_desactualizada: trm.desactualizada,
+          // Saldo del crédito expresado en USD a la TRM de la factura
+          saldo_moneda: tasaFactura > 0 ? round2(Number(credito.saldo) / tasaFactura) : 0,
+          // Valor esperado del saldo a la TRM de hoy
+          saldo_esperado_cop:
+            tasaFactura > 0
+              ? round2((Number(credito.saldo) / tasaFactura) * tasaHoy)
+              : Number(credito.saldo),
+        };
+      }
+    }
+
     return {
       ...credito,
       cuotas: cuotasConMora,
       pago_minimo: this.calcularPagoMinimo(credito),
+      moneda,
     };
   }
 
@@ -252,13 +338,19 @@ export class CarteraService {
       );
     }
 
-    return this.dataSource.transaction(async (manager) => {
+    const creditoId = await this.dataSource.transaction(async (manager) => {
       const creditoRepo = manager.getRepository(Credito);
       const cuotaRepo = manager.getRepository(CuotaCredito);
       const accountRepo = manager.getRepository(Account);
       const asentadoRepo = manager.getRepository(AccountingEntry);
       const contabilidadRepo = manager.getRepository(AccountingEntryLine);
       const empresaRepo = manager.getRepository(Company);
+
+      await assertPeriodoAbierto(
+        manager.getRepository(Cierre),
+        empresaId,
+        dto.fecha,
+      );
 
       const valorCuota = round2(dto.monto_total / dto.numero_cuotas);
       const dias = DIAS_POR_PERIODO[dto.periodo] || 30;
@@ -284,6 +376,8 @@ export class CarteraService {
       // Generar cuotas
       const cuotas: CuotaCredito[] = [];
       const fechaBase = new Date(dto.fecha);
+      // Última cuota absorbe el residuo del redondeo para que Σcuotas = monto_total
+      const valorUltima = round2(dto.monto_total - valorCuota * (dto.numero_cuotas - 1));
       for (let i = 1; i <= dto.numero_cuotas; i++) {
         const fechaOportuna = new Date(fechaBase);
         if (dto.periodo === PeriodoCredito.MENSUAL) {
@@ -291,15 +385,16 @@ export class CarteraService {
         } else {
           fechaOportuna.setDate(fechaOportuna.getDate() + dias * i);
         }
+        const valorI = i === dto.numero_cuotas ? valorUltima : valorCuota;
 
         cuotas.push(
           cuotaRepo.create({
             empresa_id: empresaId,
             credito_id: creditoGuardado.id,
             numero_cuota: i,
-            valor: valorCuota,
+            valor: valorI,
             abonado: 0,
-            saldo: valorCuota,
+            saldo: valorI,
             fecha_pago_oportuno: fechaOportuna.toISOString().split('T')[0],
             estado: EstadoCuota.PENDIENTE,
           }),
@@ -383,8 +478,12 @@ export class CarteraService {
       await asentadoRepo.save(asentadoGuardado);
       await contabilidadRepo.save(lineas.map((l) => contabilidadRepo.create(l)));
 
-      return this.findCredito(creditoGuardado.id, empresaId);
+      return creditoGuardado.id;
     });
+
+    // findCredito usa el repositorio normal: debe llamarse DESPUÉS del
+    // commit, no dentro de la transacción (la fila aún no sería visible).
+    return this.findCredito(creditoId, empresaId);
   }
 
   // ============ REGISTRAR COBRO ============
@@ -399,6 +498,12 @@ export class CarteraService {
       const empresaRepo = manager.getRepository(Company);
       const asentadoRepo = manager.getRepository(AccountingEntry);
       const contabilidadRepo = manager.getRepository(AccountingEntryLine);
+
+      await assertPeriodoAbierto(
+        manager.getRepository(Cierre),
+        empresaId,
+        dto.fecha,
+      );
 
       const credito = await creditoRepo.findOne({
         where: { id: dto.credito_id, empresa_id: empresaId },
@@ -440,8 +545,85 @@ export class CarteraService {
         throw new BadRequestException('El valor del cobro debe ser mayor a cero');
       }
 
-      const pagarTodo = dto.pagar_todo || monto >= Number(credito.saldo);
-      const montoAplicar = pagarTodo ? round2(Number(credito.saldo)) : monto;
+      // Diferencia en cambio (NIIF 21): si la venta origen es en USD, el
+      // cobro se aplica a las cuotas a la TRM de la factura. El excedente/
+      // defecto entre el dinero recibido (a TRM de hoy) y el valor nominal
+      // aplicado va a resultado: 4.2.10 ingreso / 5.3.05 gasto.
+      let tasaPago = 0;
+      let tasaFactura = 0;
+      let montoNominal = monto;
+      if (credito.tipo_credito === TipoCredito.VENTA && credito.documento_origen) {
+        const ventaOrigen = await manager.getRepository(Sale).findOne({
+          where: { empresa_id: empresaId, codigo: credito.documento_origen },
+        });
+        if (
+          ventaOrigen &&
+          ventaOrigen.moneda_codigo &&
+          ventaOrigen.moneda_codigo !== 'COP' &&
+          Number(ventaOrigen.tasa_cambio) > 1
+        ) {
+          tasaFactura = Number(ventaOrigen.tasa_cambio);
+          tasaPago =
+            Number(dto.tasa_pago) ||
+            (await this.trmService.tasaParaFecha(empresaId, dto.fecha)) ||
+            tasaFactura;
+          // El dinero recibido a TRM de hoy equivale a este nominal a la
+          // TRM de la factura
+          montoNominal = round2((monto * tasaFactura) / tasaPago);
+        }
+      }
+
+      // Descuento gerencial: parte del saldo condonada sin cobro en efectivo.
+      // Contablemente va al débito de una cuenta de descuento (4.1.75 por defecto).
+      const descuento = round2(Number(dto.descuento || 0));
+      if (descuento < 0) {
+        throw new BadRequestException('El descuento no puede ser negativo');
+      }
+
+      let cuentaDescuento: Account | null = null;
+      if (descuento > 0) {
+        cuentaDescuento = dto.cuenta_descuento_id
+          ? await accountRepo.findOne({
+              where: { id: dto.cuenta_descuento_id, empresa_id: empresaId },
+            })
+          : await this.buscarCuentaDescuento(accountRepo, empresaId);
+        if (!cuentaDescuento) {
+          throw new BadRequestException(
+            'No se encontró la cuenta de descuento (4.1.75 Devoluciones/rebajas/descuentos en ventas)',
+          );
+        }
+      }
+
+      const saldoCredito = round2(Number(credito.saldo));
+      const pagarTodo =
+        dto.pagar_todo || round2(montoNominal + descuento) >= saldoCredito;
+      const montoAplicar = pagarTodo
+        ? round2(Math.max(0, saldoCredito - descuento))
+        : montoNominal;
+      const descuentoAplicar = Math.min(descuento, round2(saldoCredito - montoAplicar));
+
+      // Diferencia en cambio: dinero real recibido menos el nominal
+      // aplicado a la cartera (solo documentos en USD).
+      const diferenciaCambio = tasaFactura > 0 ? round2(monto - montoAplicar) : 0;
+
+      // Comisión bancaria que el banco descuenta del cobro (Art. 476 E.T.:
+      // excluida de IVA por defecto; si es gravada, el 19% es descontable)
+      // y GMF 4x1000 (0.4%) como gasto bancario aparte.
+      const brutoBanco = round2(montoAplicar + diferenciaCambio); // dinero que el banco mueve
+      const comisionPct = Number(dto.comision_porcentaje) || 0;
+      if (comisionPct < 0) {
+        throw new BadRequestException('La comisión no puede ser negativa');
+      }
+      const comision = round2(brutoBanco * (comisionPct / 100));
+      const ivaComision =
+        dto.comision_gravada && comision > 0 ? round2(comision * 0.19) : 0;
+      const gmf = dto.aplicar_gmf ? round2(brutoBanco * 0.004) : 0;
+      const netoBanco = round2(brutoBanco - comision - ivaComision - gmf);
+      if (brutoBanco > 0 && netoBanco <= 0) {
+        throw new BadRequestException(
+          'La comisión y el GMF superan el valor del cobro; el neto a banco no puede ser cero o negativo',
+        );
+      }
 
       // Obtener cuotas pendientes ordenadas
       let cuotas = await cuotaRepo.find({
@@ -463,6 +645,7 @@ export class CarteraService {
       // Distribuir el pago entre las cuotas
       // Orden: primero se cubre el interés acumulado, luego el saldo de la cuota
       let restante = montoAplicar;
+      let interesCobrado = 0;
       const cuotasActualizadas: CuotaCredito[] = [];
 
       for (const cuota of cuotas) {
@@ -474,6 +657,7 @@ export class CarteraService {
           const aplicarInteres = Math.min(restante, interesPendiente);
           cuota.interes_acumulado = round2(interesPendiente - aplicarInteres);
           restante = round2(restante - aplicarInteres);
+          interesCobrado = round2(interesCobrado + aplicarInteres);
         }
 
         if (restante <= 0) {
@@ -502,10 +686,45 @@ export class CarteraService {
         restante = round2(restante - aplicar);
       }
 
+      // Distribuir el descuento gerencial sobre el saldo restante de las cuotas
+      // (reduce el saldo sin movimiento de dinero; la cuota queda PAGADA si llega a 0)
+      let restanteDescuento = descuentoAplicar;
+      for (const cuota of cuotas) {
+        if (restanteDescuento <= 0) break;
+        const saldoCuota = round2(Number(cuota.saldo));
+        if (saldoCuota <= 0) continue;
+        const d = Math.min(restanteDescuento, saldoCuota);
+        cuota.saldo = round2(saldoCuota - d);
+        cuota.fecha_pago_efectivo = dto.fecha;
+        if (cuota.saldo <= 0) {
+          cuota.estado = EstadoCuota.PAGADA;
+        }
+        if (!cuotasActualizadas.includes(cuota)) {
+          cuotasActualizadas.push(cuota);
+        }
+        restanteDescuento = round2(restanteDescuento - d);
+      }
+
       await cuotaRepo.save(cuotasActualizadas);
 
-      // Actualizar crédito
-      credito.saldo = round2(Number(credito.saldo) - montoAplicar);
+      // Cuenta de ingreso financiero para el interés cobrado (4.2.10.05 Intereses)
+      let cuentaInteres: Account | null = null;
+      if (interesCobrado > 0) {
+        cuentaInteres = await this.buscarCuentaInteresIngreso(accountRepo, empresaId);
+        if (!cuentaInteres) {
+          throw new BadRequestException(
+            'Se cobró interés moratorio pero no se encontró la cuenta de ingreso 4.2.10.05 Intereses en el PUC',
+          );
+        }
+        if (cuentaInteres.naturaleza !== 'C') {
+          throw new BadRequestException(
+            `La cuenta ${cuentaInteres.codigo} ${cuentaInteres.nombre} debe tener naturaleza Crédito (es un ingreso)`,
+          );
+        }
+      }
+
+      // Actualizar crédito (saldo baja por el cobro + el descuento condonado)
+      credito.saldo = round2(saldoCredito - montoAplicar - descuentoAplicar);
       credito.fecha_ultimo_pago = dto.fecha;
       const cuotasPagadasTotal = await cuotaRepo.count({
         where: { credito_id: credito.id, estado: EstadoCuota.PAGADA },
@@ -518,8 +737,8 @@ export class CarteraService {
       }
       await creditoRepo.save(credito);
 
-      // Actualizar banco
-      banco.monto = round2(Number(banco.monto) + montoAplicar);
+      // Actualizar banco con el NETO recibido (bruto menos comisión+IVA+GMF)
+      banco.monto = round2(Number(banco.monto) + netoBanco);
       await bancoRepo.save(banco);
 
       // Crear asiento contable
@@ -530,6 +749,7 @@ export class CarteraService {
 
       const consecutivo = 'CB' + empresa.consecutivo_asientos.toString().padStart(6, '0');
       const descripcion = dto.descripcion || `Cobro a ${cliente.nombre} - Crédito #${credito.id}`;
+      const totalAplicado = round2(montoAplicar + descuentoAplicar);
 
       const asentado = asentadoRepo.create({
         empresa_id: empresaId,
@@ -537,45 +757,183 @@ export class CarteraService {
         tipo: dto.tipo_comprobante_id,
         fecha: dto.fecha,
         descripcion,
-        total_debito: montoAplicar,
-        total_credito: montoAplicar,
+        total_debito: totalAplicado,
+        total_credito: totalAplicado,
         usuario,
         estado: 1,
       });
       const asentadoGuardado = await asentadoRepo.save(asentado);
 
-      const lineas: Partial<AccountingEntryLine>[] = [
-        {
+      // Cuenta de diferencia en cambio (se valida solo si hay diferencia)
+      let cuentaDif: Account | null = null;
+      if (diferenciaCambio !== 0) {
+        cuentaDif = await cuentaDiferenciaCambio(
+          accountRepo,
+          empresaId,
+          diferenciaCambio > 0, // ganancia → ingreso; pérdida → gasto
+        );
+      }
+
+      // Cuentas de gasto bancario (se validan solo si aplican)
+      let cuentaComision: Account | null = null;
+      if (comision > 0) {
+        cuentaComision = await cuentaGastoBancario(accountRepo, empresaId, 'comision');
+      }
+      let cuentaIvaDescontable: Account | null = null;
+      if (ivaComision > 0) {
+        cuentaIvaDescontable = await requireAccountByKeywords(
+          accountRepo,
+          empresaId,
+          ['2408', 'iva descontable', 'iva debito'],
+          'IVA descontable sobre comisión bancaria',
+        );
+      }
+      let cuentaGmf: Account | null = null;
+      if (gmf > 0) {
+        cuentaGmf = await cuentaGastoBancario(accountRepo, empresaId, 'gmf');
+      }
+
+      const lineas: Partial<AccountingEntryLine>[] = [];
+      if (netoBanco > 0) {
+        lineas.push({
           empresa_id: empresaId,
           asentado_id: asentadoGuardado.id,
           cuenta_contable_id: bancoCuenta.id,
           tercero_id: cliente.id,
           descripcion: `Entrada banco/caja cobro a ${cliente.nombre}`,
-          valor: montoAplicar,
-          debito: montoAplicar,
+          valor: netoBanco,
+          debito: netoBanco,
           credito: 0,
           naturaleza: 'D',
           consecutivo,
           fecha: dto.fecha,
           usuario,
           estado: 1,
-        },
-        {
+        });
+      }
+      if (comision > 0 && cuentaComision) {
+        lineas.push({
           empresa_id: empresaId,
           asentado_id: asentadoGuardado.id,
-          cuenta_contable_id: cliente.cuenta_contable_id,
+          cuenta_contable_id: cuentaComision.id,
           tercero_id: cliente.id,
-          descripcion: `Cobro a ${cliente.nombre}`,
-          valor: montoAplicar,
+          descripcion: `Comisión bancaria ${comisionPct}% cobro ${credito.documento_origen || '#' + credito.id}`,
+          valor: comision,
+          debito: comision,
+          credito: 0,
+          naturaleza: 'D',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        });
+      }
+      if (ivaComision > 0 && cuentaIvaDescontable) {
+        lineas.push({
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
+          cuenta_contable_id: cuentaIvaDescontable.id,
+          tercero_id: cliente.id,
+          descripcion: `IVA 19% sobre comisión bancaria`,
+          valor: ivaComision,
+          debito: ivaComision,
+          credito: 0,
+          naturaleza: 'D',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        });
+      }
+      if (gmf > 0 && cuentaGmf) {
+        lineas.push({
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
+          cuenta_contable_id: cuentaGmf.id,
+          tercero_id: cliente.id,
+          descripcion: `GMF 4x1000 cobro ${credito.documento_origen || '#' + credito.id}`,
+          valor: gmf,
+          debito: gmf,
+          credito: 0,
+          naturaleza: 'D',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        });
+      }
+      if (diferenciaCambio !== 0 && cuentaDif) {
+        // Ganancia → Cr ingreso 4.2.10 ; Pérdida → Dr gasto 5.3.05
+        const esGanancia = diferenciaCambio > 0;
+        const v = Math.abs(diferenciaCambio);
+        lineas.push({
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
+          cuenta_contable_id: cuentaDif.id,
+          tercero_id: cliente.id,
+          descripcion: `Diferencia en cambio ${credito.documento_origen} (TRM ${tasaFactura} -> ${tasaPago})`,
+          valor: v,
+          debito: esGanancia ? 0 : v,
+          credito: esGanancia ? v : 0,
+          naturaleza: esGanancia ? 'C' : 'D',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        });
+      }
+      if (descuentoAplicar > 0 && cuentaDescuento) {
+        lineas.push({
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
+          cuenta_contable_id: cuentaDescuento.id,
+          tercero_id: cliente.id,
+          descripcion: `Descuento gerencial concedido a ${cliente.nombre}`,
+          valor: descuentoAplicar,
+          debito: descuentoAplicar,
+          credito: 0,
+          naturaleza: 'D',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        });
+      }
+      if (interesCobrado > 0 && cuentaInteres) {
+        lineas.push({
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
+          cuenta_contable_id: cuentaInteres.id,
+          tercero_id: cliente.id,
+          descripcion: `Interés moratorio cobrado a ${cliente.nombre}`,
+          valor: interesCobrado,
           debito: 0,
-          credito: montoAplicar,
+          credito: interesCobrado,
           naturaleza: 'C',
           consecutivo,
           fecha: dto.fecha,
           usuario,
           estado: 1,
-        },
-      ];
+        });
+      }
+      const montoTercero = round2(totalAplicado - interesCobrado);
+      if (montoTercero > 0) {
+        lineas.push({
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
+          cuenta_contable_id: cliente.cuenta_contable_id,
+          tercero_id: cliente.id,
+          descripcion: `Cobro a ${cliente.nombre}`,
+          valor: montoTercero,
+          debito: 0,
+          credito: montoTercero,
+          naturaleza: 'C',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        });
+      }
 
       const balance = assertBalanced(lineas.map((l) => ({ debito: Number(l.debito || 0), credito: Number(l.credito || 0) })));
       asentadoGuardado.total_debito = balance.debito;
@@ -597,6 +955,12 @@ export class CarteraService {
         credito: { id: credito.id, saldo: credito.saldo, estado: credito.estado },
         cuotas_pagadas: cuotasActualizadas.filter((c) => c.estado === EstadoCuota.PAGADA).length,
         monto_aplicado: montoAplicar,
+        descuento_aplicado: descuentoAplicar,
+        interes_cobrado: interesCobrado,
+        comision_aplicada: comision,
+        iva_comision: ivaComision,
+        gmf,
+        neto_banco: netoBanco,
       };
     });
   }
@@ -636,7 +1000,8 @@ export class CarteraService {
       .where('cq.empresa_id = :empresaId', { empresaId })
       .andWhere('cq.estado != :pagada', { pagada: EstadoCuota.PAGADA })
       .andWhere('cr.tipo_credito IN (:...tipos)', { tipos: [TipoCredito.VENTA, TipoCredito.MANUAL] })
-      .andWhere('cr.estado != :anulado', { anulado: EstadoCredito.ANULADO });
+      .andWhere('cr.estado != :anulado', { anulado: EstadoCredito.ANULADO })
+      .andWhere('(cr.tipo_credito = :venta OR t.tipo_terceros IN (1, 8, 10))', { venta: TipoCredito.VENTA });
 
     if (query?.incluir_posfechadas) {
       qb.andWhere(
@@ -724,6 +1089,8 @@ export class CarteraService {
 
     const cuotas: CuotaCredito[] = [];
     const fechaBase = new Date(fecha);
+    // Última cuota absorbe el residuo del redondeo para que Σcuotas = monto
+    const valorUltima = round2(monto - valorCuota * (numeroCuotas - 1));
     for (let i = 1; i <= numeroCuotas; i++) {
       const fechaOportuna = new Date(fechaBase);
       if (periodo === PeriodoCredito.MENSUAL) {
@@ -731,15 +1098,16 @@ export class CarteraService {
       } else {
         fechaOportuna.setDate(fechaOportuna.getDate() + dias * i);
       }
+      const valorI = i === numeroCuotas ? valorUltima : valorCuota;
 
       cuotas.push(
         cuotaRepo.create({
           empresa_id: empresaId,
           credito_id: creditoGuardado.id,
           numero_cuota: i,
-          valor: valorCuota,
+          valor: valorI,
           abonado: 0,
-          saldo: valorCuota,
+          saldo: valorI,
           fecha_pago_oportuno: fechaOportuna.toISOString().split('T')[0],
           estado: EstadoCuota.PENDIENTE,
         }),
@@ -748,6 +1116,327 @@ export class CarteraService {
     await cuotaRepo.save(cuotas);
 
     return creditoGuardado;
+  }
+
+  // ============ ANÁLISIS DE VENCIMIENTO (aging / ficha de vencimiento) ============
+
+  /**
+   * Clasifica la cartera por rangos de días de mora (estándar NIIF 9
+   * simplificado + cartilla colombiana A–E). Cada cuota se ubica en el
+   * rango según sus días de mora (considerando posfechamiento).
+   */
+  async analisisVencimiento(empresaId: number) {
+    const cuotas = await this.cuotaRepo
+      .createQueryBuilder('cq')
+      .leftJoinAndSelect('cq.credito', 'cr')
+      .leftJoinAndSelect('cr.tercero', 't')
+      .where('cq.empresa_id = :empresaId', { empresaId })
+      .andWhere('cq.estado != :pagada', { pagada: EstadoCuota.PAGADA })
+      .andWhere('cq.saldo > 0')
+      .andWhere('cr.tipo_credito IN (:...tipos)', {
+        tipos: [TipoCredito.VENTA, TipoCredito.MANUAL],
+      })
+      .andWhere('cr.estado != :anulado', { anulado: EstadoCredito.ANULADO })
+      .andWhere('(cr.tipo_credito = :venta OR t.tipo_terceros IN (1, 8, 10))', {
+        venta: TipoCredito.VENTA,
+      })
+      .getMany();
+
+    const mapa = new Map<number, any>();
+    const totales = this.bucketsVacios();
+    let totalGeneral = 0;
+    let interesTotal = 0;
+
+    for (const cq of cuotas) {
+      const tercero = cq.credito?.tercero;
+      if (!tercero) continue;
+
+      const diasMora = this.calcularDiasMora(
+        cq.fecha_pago_oportuno,
+        cq.fecha_posfechada,
+      );
+      const tasaMora = Number(cq.credito.tasa_mora) || 0;
+      const interes = await this.acumularInteres(cq, tasaMora);
+      const bucket = this.bucketPorDias(diasMora);
+      const saldo = round2(Number(cq.saldo));
+
+      if (!mapa.has(tercero.id)) {
+        mapa.set(tercero.id, {
+          tercero_id: tercero.id,
+          nombre: tercero.nombre || '',
+          documento: tercero.documento || '',
+          buckets: this.bucketsVacios(),
+          interes_mora: 0,
+          total: 0,
+          dias_mora_max: 0,
+          calificacion: 'A',
+        });
+      }
+
+      const e = mapa.get(tercero.id);
+      e.buckets[bucket] = round2(e.buckets[bucket] + saldo);
+      e.interes_mora = round2(e.interes_mora + interes);
+      e.total = round2(e.total + saldo);
+      if (diasMora > e.dias_mora_max) e.dias_mora_max = diasMora;
+
+      totales[bucket] = round2(totales[bucket] + saldo);
+      totalGeneral = round2(totalGeneral + saldo);
+      interesTotal = round2(interesTotal + interes);
+    }
+
+    const data = Array.from(mapa.values())
+      .map((e) => ({
+        ...e,
+        calificacion: this.calificacionPorMora(e.dias_mora_max),
+      }))
+      .sort((a, b) => b.total - a.total);
+
+    return {
+      data,
+      totales,
+      total_general: totalGeneral,
+      interes_total: interesTotal,
+      clientes: data.length,
+      rangos: [
+        'al_dia', 'd1_30', 'd31_60', 'd61_90',
+        'd91_180', 'd181_360', 'd361_720', 'mas_720',
+      ],
+    };
+  }
+
+  private bucketsVacios() {
+    return {
+      al_dia: 0,    // sin vencer
+      d1_30: 0,     // 1-30 días
+      d31_60: 0,    // 31-60 días
+      d61_90: 0,    // 61-90 días
+      d91_180: 0,   // 91-180 días
+      d181_360: 0,  // 181-360 días
+      d361_720: 0,  // 361-720 días
+      mas_720: 0,   // más de 720 días
+    };
+  }
+
+  /**
+   * Genera el asiento contable de provisión de cartera según el análisis
+   * de vencimiento: Dr 5.2.99 (gasto provisión) / Cr 1.3.99.05 (provisión),
+   * con una línea por tercero para trazabilidad.
+   */
+  async generarAsientoProvision(dto: GenerarProvisionDto, empresaId: number, usuario: string) {
+    const analisis = await this.analisisVencimiento(empresaId);
+
+    const tasas = {
+      al_dia: 0, d1_30: 1, d31_60: 3, d61_90: 5,
+      d91_180: 10, d181_360: 20, d361_720: 50, mas_720: 100,
+      ...(dto.tasas || {}),
+    };
+
+    // Provisión por tercero
+    const provisiones = analisis.data
+      .map((row: any) => {
+        const provision = Object.keys(tasas).reduce(
+          (acc, key) => acc + (Number(row.buckets?.[key] || 0) * Number(tasas[key] || 0)) / 100,
+          0,
+        );
+        return { tercero: row, provision: round2(provision) };
+      })
+      .filter((p: any) => p.provision > 0);
+
+    const totalProvision = round2(
+      provisiones.reduce((acc: number, p: any) => acc + p.provision, 0),
+    );
+
+    if (totalProvision <= 0) {
+      throw new BadRequestException(
+        'La provisión calculada es cero; no hay asiento que generar',
+      );
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      const accountRepo = manager.getRepository(Account);
+      const empresaRepo = manager.getRepository(Company);
+      const asentadoRepo = manager.getRepository(AccountingEntry);
+      const contabilidadRepo = manager.getRepository(AccountingEntryLine);
+
+      await assertPeriodoAbierto(
+        manager.getRepository(Cierre),
+        empresaId,
+        dto.fecha,
+      );
+
+      const cuentas = await accountRepo.find({
+        where: { empresa_id: empresaId, estado: 1 },
+      });
+      const porCodigo = (codigos: string[]) =>
+        cuentas.find((c) => codigos.includes(c.codigo)) ||
+        cuentas.find((c) => codigos.some((cod) => (c.codigo || '').startsWith(cod + '.')));
+
+      const cuentaGasto = dto.cuenta_gasto_id
+        ? cuentas.find((c) => c.id === dto.cuenta_gasto_id)
+        : porCodigo(['5.2.99', '5.1.99', '5299', '5199']);
+      const cuentaProvision = dto.cuenta_provision_id
+        ? cuentas.find((c) => c.id === dto.cuenta_provision_id)
+        : porCodigo(['1.3.99.05', '1.3.99', '1399']);
+
+      if (!cuentaGasto || !cuentaProvision) {
+        throw new BadRequestException(
+          'No se encontraron las cuentas de provisión (gasto 5.2.99 y provisión 1.3.99.05)',
+        );
+      }
+
+      // Saldos actuales de la cuenta de provisión por tercero
+      // (lo ya provisionado: créditos - débitos en la 1.3.99.05)
+      const saldosActuales = await contabilidadRepo
+        .createQueryBuilder('l')
+        .select('l.tercero_id', 'tercero_id')
+        .addSelect('COALESCE(SUM(l.credito) - SUM(l.debito), 0)', 'saldo')
+        .where('l.empresa_id = :empresaId', { empresaId })
+        .andWhere('l.cuenta_contable_id = :cid', { cid: cuentaProvision.id })
+        .andWhere('l.estado = 1')
+        .groupBy('l.tercero_id')
+        .getRawMany();
+      const saldoPorTercero = new Map<number, number>(
+        saldosActuales.map((s: any) => [Number(s.tercero_id), round2(Number(s.saldo))]),
+      );
+
+      // Ajuste por diferencia: solo se asienta el delta entre la provisión
+      // requerida y el saldo ya registrado en la cuenta de provisión.
+      // delta > 0 -> se constituye (Dr gasto / Cr provisión)
+      // delta < 0 -> se recupera (Dr provisión / Cr gasto)
+      const ajustes: { tercero: any; delta: number; requerida: number; actual: number }[] = [];
+      for (const p of provisiones) {
+        const actual = saldoPorTercero.get(p.tercero.tercero_id) || 0;
+        const delta = round2(p.provision - actual);
+        if (delta !== 0) {
+          ajustes.push({ tercero: p.tercero, delta, requerida: p.provision, actual });
+        }
+        saldoPorTercero.delete(p.tercero.tercero_id);
+      }
+      // Terceros que ya no tienen cartera pero conservan saldo de provisión:
+      // la provisión sobrante se recupera en su totalidad.
+      for (const [terceroId, saldo] of saldoPorTercero) {
+        if (saldo > 0) {
+          ajustes.push({
+            tercero: { tercero_id: terceroId, nombre: `tercero #${terceroId}`, calificacion: '-' },
+            delta: round2(-saldo),
+            requerida: 0,
+            actual: saldo,
+          });
+        }
+      }
+
+      if (ajustes.length === 0) {
+        throw new BadRequestException(
+          'La provisión ya coincide con el análisis de vencimiento; no hay ajuste que registrar',
+        );
+      }
+
+      const empresa = await empresaRepo.findOneBy({ id: empresaId });
+      if (!empresa) throw new NotFoundException('Empresa no encontrada');
+      empresa.consecutivo_asientos = (empresa.consecutivo_asientos || 0) + 1;
+      await empresaRepo.save(empresa);
+
+      const consecutivo = 'PV' + empresa.consecutivo_asientos.toString().padStart(6, '0');
+      const descripcion =
+        dto.descripcion ||
+        `Provisión de cartera según análisis de vencimiento (${analisis.clientes} clientes)`;
+
+      const asentado = asentadoRepo.create({
+        empresa_id: empresaId,
+        consecutivo,
+        tipo: dto.tipo_comprobante_id,
+        fecha: dto.fecha,
+        descripcion,
+        total_debito: 0,
+        total_credito: 0,
+        usuario,
+        estado: 1,
+      });
+      const asentadoGuardado = await asentadoRepo.save(asentado);
+
+      // Líneas por tercero: delta positivo constituye, delta negativo recupera
+      const lineas: Partial<AccountingEntryLine>[] = [];
+      let totalConstituido = 0;
+      let totalRecuperado = 0;
+      for (const a of ajustes) {
+        const monto = round2(Math.abs(a.delta));
+        const esConstitucion = a.delta > 0;
+        if (esConstitucion) totalConstituido = round2(totalConstituido + monto);
+        else totalRecuperado = round2(totalRecuperado + monto);
+
+        const descripcionLinea = `${esConstitucion ? 'Provisión' : 'Recuperación'} cartera ${a.tercero.nombre} (req. ${a.requerida} / reg. ${a.actual})`;
+        lineas.push({
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
+          cuenta_contable_id: esConstitucion ? cuentaGasto.id : cuentaProvision.id,
+          tercero_id: a.tercero.tercero_id,
+          descripcion: descripcionLinea,
+          valor: monto,
+          debito: monto,
+          credito: 0,
+          naturaleza: 'D',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        });
+        lineas.push({
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
+          cuenta_contable_id: esConstitucion ? cuentaProvision.id : cuentaGasto.id,
+          tercero_id: a.tercero.tercero_id,
+          descripcion: descripcionLinea,
+          valor: monto,
+          debito: 0,
+          credito: monto,
+          naturaleza: 'C',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        });
+      }
+
+      const balance = assertBalanced(
+        lineas.map((l) => ({ debito: Number(l.debito || 0), credito: Number(l.credito || 0) })),
+      );
+      asentadoGuardado.total_debito = balance.debito;
+      asentadoGuardado.total_credito = balance.credito;
+      await asentadoRepo.save(asentadoGuardado);
+      await contabilidadRepo.save(lineas.map((l) => contabilidadRepo.create(l)));
+
+      return {
+        asentado: asentadoGuardado,
+        consecutivo,
+        total_provision: totalProvision,
+        total_constituido: totalConstituido,
+        total_recuperado: totalRecuperado,
+        terceros: provisiones.length,
+        ajustes: ajustes.length,
+        cuenta_gasto: { id: cuentaGasto.id, codigo: cuentaGasto.codigo, nombre: cuentaGasto.nombre },
+        cuenta_provision: { id: cuentaProvision.id, codigo: cuentaProvision.codigo, nombre: cuentaProvision.nombre },
+      };
+    });
+  }
+
+  private bucketPorDias(dias: number): string {
+    if (dias <= 0) return 'al_dia';
+    if (dias <= 30) return 'd1_30';
+    if (dias <= 60) return 'd31_60';
+    if (dias <= 90) return 'd61_90';
+    if (dias <= 180) return 'd91_180';
+    if (dias <= 360) return 'd181_360';
+    if (dias <= 720) return 'd361_720';
+    return 'mas_720';
+  }
+
+  /** Calificación cartilla comercial colombiana por días máximos de mora */
+  private calificacionPorMora(diasMax: number): string {
+    if (diasMax <= 90) return 'A';   // Normal
+    if (diasMax <= 180) return 'B';  // Aceptable
+    if (diasMax <= 360) return 'C';  // Apreciable
+    if (diasMax <= 720) return 'D';  // Medio
+    return 'E';                      // Irrecuperable
   }
 
   // ============ HELPERS ============
@@ -852,5 +1541,49 @@ export class CarteraService {
       cuentas.find((c) => /^1\.1/.test(c.codigo || '') || /^11/.test(c.codigo || '')) ||
       null
     );
+  }
+
+  /**
+   * Cuenta por defecto para el descuento gerencial en cartera:
+   * 1. 4.1.75 Devoluciones, rebajas y descuentos en ventas (contra-ingreso)
+   * 2. 4.2.75 Descuentos en otras ventas
+   * 3. 5.3.05.35 Descuentos comerciales condicionados (gasto)
+   */
+  private async buscarCuentaDescuento(
+    accountRepo: Repository<Account>,
+    empresaId: number,
+  ): Promise<Account | null> {
+    const cuentas = await accountRepo.find({
+      where: { empresa_id: empresaId, estado: 1 },
+    });
+    const codigos = ['4.1.75', '4.2.75', '5.3.05.35', '4175', '4275', '530535'];
+    for (const codigo of codigos) {
+      const found = cuentas.find(
+        (c) => c.codigo === codigo || (c.codigo || '').startsWith(codigo + '.'),
+      );
+      if (found) return found;
+    }
+    return null;
+  }
+
+  /**
+   * Cuenta de ingreso financiero para intereses moratorios cobrados:
+   * 4.2.10.05 Intereses (o la subcuenta 4.2.10.x disponible).
+   */
+  private async buscarCuentaInteresIngreso(
+    accountRepo: Repository<Account>,
+    empresaId: number,
+  ): Promise<Account | null> {
+    const cuentas = await accountRepo.find({
+      where: { empresa_id: empresaId, estado: 1 },
+    });
+    const codigos = ['4.2.10.05', '4.2.10', '421005', '4210'];
+    for (const codigo of codigos) {
+      const found = cuentas.find(
+        (c) => c.codigo === codigo || (c.codigo || '').startsWith(codigo + '.'),
+      );
+      if (found) return found;
+    }
+    return null;
   }
 }

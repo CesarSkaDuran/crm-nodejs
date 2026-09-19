@@ -9,6 +9,8 @@ import { Purchase } from '../purchases/entities/purchase.entity';
 import { AccountingEntry, AccountingEntryLine } from '../accounting/entities/accounting-entry.entity';
 import { Company } from '../companies/entities/company.entity';
 import { Account } from '../accounts/entities/account.entity';
+import { Auditoria } from '../auditoria/entities/auditoria.entity';
+import { Product } from '../products/entities/product.entity';
 
 @Module({
   imports: [
@@ -17,10 +19,12 @@ import { Account } from '../accounts/entities/account.entity';
       Kardex,
       Sale,
       Purchase,
+      Product,
       AccountingEntry,
       AccountingEntryLine,
       Company,
       Account,
+      Auditoria,
     ]),
   ],
   controllers: [CierresController],

@@ -7,6 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Account } from './entities/account.entity';
+import { AccountingEntryLine } from '../accounting/entities/accounting-entry.entity';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
 
@@ -15,6 +16,8 @@ export class AccountsService {
   constructor(
     @InjectRepository(Account)
     private readonly repo: Repository<Account>,
+    @InjectRepository(AccountingEntryLine)
+    private readonly lineaRepo: Repository<AccountingEntryLine>,
   ) {}
 
   private async validarPadre(empresaId: number, padreId?: number) {
@@ -45,11 +48,30 @@ export class AccountsService {
     return this.repo.save(cuenta);
   }
 
-  findAll(empresaId: number) {
-    return this.repo.find({
+  async findAll(empresaId: number) {
+    const cuentas = await this.repo.find({
       where: { empresa_id: empresaId },
       order: { codigo: 'ASC' },
     });
+
+    // Marcar cuentas con movimientos contables (no se pueden eliminar).
+    // Una sola consulta agrupada; incluye líneas anuladas porque también
+    // son historia contable.
+    const movs = await this.lineaRepo
+      .createQueryBuilder('l')
+      .select('l.cuenta_contable_id', 'cuenta_id')
+      .addSelect('COUNT(*)', 'total')
+      .where('l.empresa_id = :empresaId', { empresaId })
+      .groupBy('l.cuenta_contable_id')
+      .getRawMany();
+    const movMap = new Map<number, number>(
+      movs.map((m) => [Number(m.cuenta_id), Number(m.total)]),
+    );
+
+    return cuentas.map((c) => ({
+      ...c,
+      movimientos: movMap.get(c.id) || 0,
+    }));
   }
 
   async findOne(id: number, empresaId: number) {
@@ -65,6 +87,33 @@ export class AccountsService {
 
   async update(id: number, empresaId: number, dto: UpdateAccountDto) {
     const cuenta = await this.findOne(id, empresaId);
+
+    // Trazabilidad: una cuenta con movimientos contables no puede cambiar
+    // código, naturaleza ni clasificación — eso redefiniría el sentido de
+    // los asientos históricos. Sí se permite nombre, estado, padre, etc.
+    const camposEstructurales: Array<keyof UpdateAccountDto> = [
+      'codigo',
+      'naturaleza',
+      'clasificacion',
+    ];
+    const cambiaEstructura = camposEstructurales.some(
+      (campo) =>
+        dto[campo] !== undefined &&
+        String(dto[campo]) !== String(cuenta[campo]),
+    );
+    if (cambiaEstructura) {
+      const movimientos = await this.lineaRepo.count({
+        where: { cuenta_contable_id: id, empresa_id: empresaId },
+      });
+      if (movimientos > 0) {
+        throw new BadRequestException(
+          `La cuenta ${cuenta.codigo} ${cuenta.nombre} tiene ${movimientos} ` +
+            `movimiento(s) contables: no se puede cambiar su código, ` +
+            `naturaleza ni clasificación. Solo se permite editar el nombre ` +
+            `o desactivarla.`,
+        );
+      }
+    }
 
     if (dto.codigo && dto.codigo !== cuenta.codigo) {
       const exists = await this.repo.findOne({
@@ -100,6 +149,20 @@ export class AccountsService {
         'No se puede eliminar una cuenta con subcuentas',
       );
     }
+
+    // Trazabilidad: una cuenta con movimientos (aunque estén anulados) no
+    // se puede borrar; solo se puede desactivar (estado=0).
+    const movimientos = await this.lineaRepo.count({
+      where: { cuenta_contable_id: id, empresa_id: empresaId },
+    });
+    if (movimientos > 0) {
+      throw new BadRequestException(
+        `La cuenta ${cuenta.codigo} ${cuenta.nombre} tiene ${movimientos} ` +
+          `movimiento(s) contables y no se puede eliminar. Puede ` +
+          `desactivarla (estado = Inactivo).`,
+      );
+    }
+
     await this.repo.remove(cuenta);
   }
 

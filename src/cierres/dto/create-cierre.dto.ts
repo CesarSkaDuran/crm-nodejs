@@ -1,4 +1,4 @@
-import { IsString, IsDateString, IsNotEmpty } from 'class-validator';
+import { IsString, IsDateString, IsNotEmpty, IsOptional } from 'class-validator';
 
 export class CreateCierreDto {
   @IsNotEmpty()
@@ -13,9 +13,11 @@ export class CreateCierreDto {
   @IsDateString()
   fecha_fin: string;
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsDateString()
-  fecha_cierre: string;
+  fecha_cierre?: string;
 
+  @IsOptional()
+  @IsString()
   descripcion?: string;
 }

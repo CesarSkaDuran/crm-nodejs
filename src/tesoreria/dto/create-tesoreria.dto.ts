@@ -63,6 +63,11 @@ export class CreateTesoreriaDto {
   @IsNotEmpty()
   cuenta_contrapartida_id: number;
 
+  @ApiPropertyOptional({ example: 10, description: 'Código DIAN de la forma de pago' })
+  @IsInt()
+  @IsOptional()
+  forma?: number;
+
   @ApiPropertyOptional({ example: 1 })
   @IsInt()
   @IsOptional()

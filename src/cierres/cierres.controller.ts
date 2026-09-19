@@ -71,12 +71,46 @@ export class CierresController {
     return this.cierresService.cerrar(id, usuario.empresa_id, usuario.nombre);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
+  @Roles(UserRole.ADMIN)
   @Post(':id/anular')
   anular(
     @Param('id', ParseIntPipe) id: number,
+    @Body('motivo') motivo: string,
     @CurrentUser() usuario: any,
   ) {
-    return this.cierresService.anular(id, usuario.empresa_id, usuario.nombre);
+    return this.cierresService.anular(
+      id,
+      usuario.empresa_id,
+      usuario.nombre,
+      motivo,
+    );
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
+  @Post(':id/asiento-cierre')
+  asientoCierre(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.cierresService.generarAsientoCierre(
+      id,
+      usuario.empresa_id,
+      usuario.nombre,
+    );
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Post(':id/reabrir')
+  reabrir(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('motivo') motivo: string,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.cierresService.reabrir(
+      id,
+      usuario.empresa_id,
+      usuario.nombre,
+      motivo,
+    );
   }
 }

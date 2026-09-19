@@ -18,12 +18,16 @@ import {
   AccountingEntryLine,
 } from '../accounting/entities/accounting-entry.entity';
 import { Banco } from '../bancos/entities/banco.entity';
+import { Moneda } from '../monedas/entities/moneda.entity';
 import {
   assertBalanced,
+  assertPeriodoAbierto,
   requireAccountByKeywords,
   resolveBancoCuenta,
+  resolverMonedaDocumento,
   round2,
 } from '../accounting/accounting-helpers';
+import { Cierre } from '../cierres/entities/cierre.entity';
 import { CarteraService } from '../cartera/cartera.service';
 import { PeriodoCredito, TipoCredito } from '../cartera/entities/credito.entity';
 import { CierresService } from '../cierres/cierres.service';
@@ -110,6 +114,40 @@ export class SalesService {
         throw new BadRequestException(
           'La cuenta contable del cliente no existe en esta empresa',
         );
+      }
+
+      // --- Conversión de moneda extranjera (NIIF 21) ---
+      // Si el documento es en USD, todos los valores del DTO
+      // (precio_unitario por línea, flete, retención) vienen en USD y se
+      // convierten a COP con la TRM. Los porcentajes no se convierten.
+      const conv = await resolverMonedaDocumento(
+        manager.getRepository(Moneda),
+        empresaId,
+        dto.moneda_id,
+        dto.tasa_cambio,
+      );
+      let valorMonedaExtranjera = 0;
+      if (conv?.esExtranjera) {
+        const tasa = conv.tasa;
+        // Total en USD calculado con los valores originales (antes de convertir)
+        let baseUsd = 0;
+        let impUsd = 0;
+        for (const item of dto.detalles) {
+          const bruto = Number(item.cantidad) * Number(item.precio_unitario);
+          const neto = bruto - (bruto * Number(item.descuento || 0)) / 100;
+          baseUsd += neto;
+          impUsd += (neto * Number(item.impuesto || 0)) / 100;
+        }
+        valorMonedaExtranjera = round2(
+          baseUsd + impUsd + Number(dto.flete || 0) - Number(dto.retencion || 0),
+        );
+        // Convertir los montos a COP; el resto del flujo sigue igual
+        dto.detalles = dto.detalles.map((d) => ({
+          ...d,
+          precio_unitario: round2(Number(d.precio_unitario) * tasa),
+        }));
+        dto.flete = round2(Number(dto.flete || 0) * tasa);
+        dto.retencion = round2(Number(dto.retencion || 0) * tasa);
       }
 
       const codigoVenta = await this.obtenerConsecutivoAtomico(
@@ -328,6 +366,11 @@ export class SalesService {
         modo: dto.modo ?? 1,
         forma: dto.forma,
         estado: 1,
+        moneda_id: conv?.moneda.id ?? null,
+        moneda_codigo: conv?.moneda.codigo ?? 'COP',
+        tasa_cambio: conv?.tasa ?? 1,
+        valor_moneda_extranjera: valorMonedaExtranjera,
+        valor_cop: round2(total),
       });
       const ventaGuardada = await ventaRepo.save(venta);
 
@@ -602,6 +645,13 @@ export class SalesService {
     if (venta.estado === 0) {
       throw new BadRequestException('La venta ya está anulada');
     }
+    // Anular equivale a reversar el asiento original: bloquear si su
+    // período está cerrado (la reversa altera ese período).
+    await assertPeriodoAbierto(
+      this.ventaRepo.manager.getRepository(Cierre),
+      empresaId,
+      venta.fecha,
+    );
 
     return this.dataSource.transaction(async (manager) => {
       const ventaRepo = manager.getRepository(Sale);

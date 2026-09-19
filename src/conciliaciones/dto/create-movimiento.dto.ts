@@ -38,4 +38,20 @@ export class CreateMovimientoConciliacionDto {
   @IsOptional()
   @IsInt()
   tesoreria_id?: number;
+
+  @ApiPropertyOptional({ description: 'Código DIAN de la forma de pago (ej. 20=cheque)' })
+  @IsOptional()
+  @IsInt()
+  forma?: number;
+
+  @ApiPropertyOptional({ description: 'Concepto: nota_debito, nota_credito, cheque_circulacion, consignacion_transito, error_libros, error_extracto' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  concepto?: string;
+
+  @ApiPropertyOptional({ description: 'Cuenta PUC de contrapartida (obligatoria para ND/NC)' })
+  @IsOptional()
+  @IsInt()
+  cuenta_contable_id?: number;
 }

@@ -10,9 +10,11 @@ import {
   AccountingEntry,
   AccountingEntryLine,
 } from '../accounting/entities/accounting-entry.entity';
+import { AuditoriaModule } from '../auditoria/auditoria.module';
 
 @Module({
   imports: [
+    AuditoriaModule,
     TypeOrmModule.forFeature([
       Tesoreria,
       Banco,

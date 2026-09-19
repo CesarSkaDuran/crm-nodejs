@@ -6,9 +6,11 @@ import { ConciliacionBancaria } from './entities/conciliacion-bancaria.entity';
 import { ConciliacionMovimiento } from './entities/conciliacion-movimiento.entity';
 import { Banco } from '../bancos/entities/banco.entity';
 import { Tesoreria } from '../tesoreria/entities/tesoreria.entity';
+import { TesoreriaModule } from '../tesoreria/tesoreria.module';
 
 @Module({
   imports: [
+    TesoreriaModule,
     TypeOrmModule.forFeature([
       ConciliacionBancaria,
       ConciliacionMovimiento,

@@ -9,9 +9,11 @@ import { Banco } from '../bancos/entities/banco.entity';
 import { Company } from '../companies/entities/company.entity';
 import { Credito } from './entities/credito.entity';
 import { CuotaCredito } from './entities/cuota-credito.entity';
+import { TrmModule } from '../trm/trm.module';
 
 @Module({
   imports: [
+    TrmModule,
     TypeOrmModule.forFeature([
       Third,
       AccountingEntryLine,

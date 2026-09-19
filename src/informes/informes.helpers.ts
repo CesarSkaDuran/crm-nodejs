@@ -58,7 +58,7 @@ export function construirFiltroFechas(
 
 /**
  * Construye el filtro SQL de corte para reportes de saldo acumulado
- * (Balance General).
+ * (Estado de Situación Financiera).
  *
  * A diferencia de construirFiltroFechas, que genera un rango [date, date2]
  * para reportes de flujo, esta función genera SOLO un límite superior

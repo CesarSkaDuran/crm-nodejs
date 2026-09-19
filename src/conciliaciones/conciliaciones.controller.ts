@@ -72,7 +72,11 @@ export class ConciliacionesController {
   @Roles(UserRole.ADMIN, UserRole.CONTADOR)
   @Delete(':id')
   remove(@Param('id', ParseIntPipe) id: number, @CurrentUser() usuario: any) {
-    return this.service.remove(id, usuario.empresa_id);
+    return this.service.remove(
+      id,
+      usuario.empresa_id,
+      usuario.email || usuario.sub || 'sistema',
+    );
   }
 
   // ============ Movimientos de conciliación ============
@@ -108,6 +112,10 @@ export class ConciliacionesController {
   @Roles(UserRole.ADMIN, UserRole.CONTADOR)
   @Post(':id/anular')
   anular(@Param('id', ParseIntPipe) id: number, @CurrentUser() usuario: any) {
-    return this.service.anular(id, usuario.empresa_id);
+    return this.service.anular(
+      id,
+      usuario.empresa_id,
+      usuario.email || usuario.sub || 'sistema',
+    );
   }
 }

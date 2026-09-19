@@ -359,7 +359,7 @@ describe('InformesService - Fase 1 (Tests de Regresión)', () => {
   // ---------------------------------------------------------------------------
   // TEST 4: balanceGeneral - Activo = Pasivo + Patrimonio
   // ---------------------------------------------------------------------------
-  describe('Caso 4: Balance General - ecuación contable', () => {
+  describe('Caso 4: Estado de Situación Financiera - ecuación contable', () => {
     it('Activo = Pasivo + Patrimonio (con Resultado del Ejercicio)', async () => {
       // Mock del accountRepo.createQueryBuilder para devolver cuentas de clases 1, 2, 3
       const cuentasBalance = CUENTAS_FIXTURE.filter((c) => ['1', '2', '3'].includes(c.clase));
@@ -394,7 +394,7 @@ describe('InformesService - Fase 1 (Tests de Regresión)', () => {
   // ---------------------------------------------------------------------------
   // TEST 5: balanceGeneral sin nodo raíz real para Activo/Pasivo
   // ---------------------------------------------------------------------------
-  describe('Caso 5: Balance General sin nodo raíz para Activo/Pasivo', () => {
+  describe('Caso 5: Estado de Situación Financiera sin nodo raíz para Activo/Pasivo', () => {
     it('debe crear nodo virtual y el total no debe quedar en 0', async () => {
       // Plan de cuentas SIN nodo raíz "1" ni "2" (sin cuenta_padre_id=null para esas clases).
       // Las cuentas de Activo y Pasivo tienen cuenta_padre_id apuntando a un ID
@@ -519,7 +519,7 @@ describe('InformesService - Fase 1 (Tests de Regresión)', () => {
   // ---------------------------------------------------------------------------
   // TEST 7: balanceGeneral - no doble conteo en total_debito / total_credito
   // ---------------------------------------------------------------------------
-  describe('Caso 7: Balance General - no doble conteo de totales', () => {
+  describe('Caso 7: Estado de Situación Financiera - no doble conteo de totales', () => {
     it('total_debito debe sumar solo movimientos directos, no agregados jerárquicos', async () => {
       // Catálogo de 3 niveles: clase 1 → grupo 1.1 → auxiliar 1.1.05
       // Solo la auxiliar tiene movimientos reales (debito = 100)

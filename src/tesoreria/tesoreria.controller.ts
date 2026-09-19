@@ -59,7 +59,12 @@ export class TesoreriaController {
     @Body() dto: UpdateTesoreriaDto,
     @CurrentUser() usuario: any,
   ) {
-    return this.tesoreriaService.update(id, usuario.empresa_id, dto);
+    return this.tesoreriaService.update(
+      id,
+      usuario.empresa_id,
+      dto,
+      usuario.email || usuario.sub || 'sistema',
+    );
   }
 
   @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
@@ -68,6 +73,10 @@ export class TesoreriaController {
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() usuario: any,
   ) {
-    return this.tesoreriaService.remove(id, usuario.empresa_id);
+    return this.tesoreriaService.remove(
+      id,
+      usuario.empresa_id,
+      usuario.email || usuario.sub || 'sistema',
+    );
   }
 }

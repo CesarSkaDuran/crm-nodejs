@@ -82,6 +82,21 @@ export class Sale {
   @Column({ type: 'tinyint', default: 1, comment: '1 asentada, 0 anulada' })
   estado: number;
 
+  @Column({ nullable: true, comment: 'FK a monedas (COP por defecto)' })
+  moneda_id: number;
+
+  @Column({ length: 3, default: 'COP' })
+  moneda_codigo: string;
+
+  @Column('decimal', { precision: 15, scale: 2, default: 0, comment: 'Total en la moneda original (ej. USD)' })
+  valor_moneda_extranjera: number;
+
+  @Column('decimal', { precision: 20, scale: 8, default: 1, comment: 'TRM del día del documento' })
+  tasa_cambio: number;
+
+  @Column('decimal', { precision: 15, scale: 2, default: 0, comment: 'Total equivalente en COP' })
+  valor_cop: number;
+
   @OneToMany(() => SaleDetail, (detalle) => detalle.venta)
   detalles: SaleDetail[];
 

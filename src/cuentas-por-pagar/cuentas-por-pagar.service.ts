@@ -11,7 +11,10 @@ import { CuotaCredito, EstadoCuota } from '../cartera/entities/cuota-credito.ent
 import { CreateCreditoProveedorDto } from './dto/create-credito-proveedor.dto';
 import { RegistrarPagoDto } from './dto/registrar-pago.dto';
 import { PosfecharPagoDto } from './dto/posfechar-pago.dto';
-import { resolveBancoCuenta, round2, assertBalanced } from '../accounting/accounting-helpers';
+import { resolveBancoCuenta, round2, assertBalanced, assertPeriodoAbierto, cuentaDiferenciaCambio, cuentaGastoBancario, requireAccountByKeywords } from '../accounting/accounting-helpers';
+import { Cierre } from '../cierres/entities/cierre.entity';
+import { Purchase } from '../purchases/entities/purchase.entity';
+import { TrmService } from '../trm/trm.service';
 
 const DIAS_POR_PERIODO: Record<number, number> = {
   [PeriodoCredito.SEMANAL]: 7,
@@ -34,6 +37,7 @@ export class CuentasPorPagarService {
     private readonly cuotaRepo: Repository<CuotaCredito>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    private readonly trmService: TrmService,
   ) {}
 
   // ============ LISTADO DE CUENTAS POR PAGAR (resumen por proveedor) ============
@@ -49,7 +53,11 @@ export class CuentasPorPagarService {
       .andWhere('cr.tipo_credito IN (:...tipos)', {
         tipos: [TipoCredito.COMPRA, TipoCredito.MANUAL],
       })
-      .andWhere('cr.estado != :anulado', { anulado: EstadoCredito.ANULADO });
+      .andWhere('cr.estado != :anulado', { anulado: EstadoCredito.ANULADO })
+      // Créditos manuales solo si el tercero es proveedor (tipo 2)
+      .andWhere('(cr.tipo_credito = :compra OR t.tipo_terceros = 2)', {
+        compra: TipoCredito.COMPRA,
+      });
 
     if (query.solo_saldo_positivo) {
       qb.andWhere('cr.saldo > 0');
@@ -79,6 +87,24 @@ export class CuentasPorPagarService {
 
     // Agrupar por proveedor
     const mapa = new Map<number, any>();
+    // Datos de moneda de las compras origen (USD)
+    const codigos = creditos.map((c) => c.documento_origen).filter(Boolean) as string[];
+    const comprasUsd = codigos.length
+      ? await this.creditoRepo.manager.getRepository(Purchase).find({
+          where: { empresa_id: empresaId, codigo: In(codigos) },
+        })
+      : [];
+    const docsPorCodigo = new Map<string, any>();
+    for (const p of comprasUsd) {
+      if (p.moneda_codigo && p.moneda_codigo !== 'COP') {
+        docsPorCodigo.set(p.codigo, {
+          moneda_codigo: p.moneda_codigo,
+          tasa_cambio: Number(p.tasa_cambio),
+          valor_moneda_extranjera: Number(p.valor_moneda_extranjera),
+        });
+      }
+    }
+
     for (const cr of creditos) {
       const tid = cr.tercero_id;
       if (!mapa.has(tid)) {
@@ -103,6 +129,8 @@ export class CuentasPorPagarService {
         numero_cuotas: cr.numero_cuotas,
         periodo: cr.periodo,
         estado: cr.estado,
+        // Datos de moneda (si la compra origen es en USD)
+        ...docsPorCodigo.get(cr.documento_origen || ''),
       });
       entry.saldo_total = round2(entry.saldo_total + Number(cr.saldo));
     }
@@ -160,6 +188,24 @@ export class CuentasPorPagarService {
 
     const saldoTotal = creditos.reduce((acc, c) => acc + Number(c.saldo), 0);
 
+    // Datos de moneda de las compras origen (USD)
+    const codigosDoc = creditos.map((c) => c.documento_origen).filter(Boolean) as string[];
+    const comprasDoc = codigosDoc.length
+      ? await this.creditoRepo.manager.getRepository(Purchase).find({
+          where: { empresa_id: empresaId, codigo: In(codigosDoc) },
+        })
+      : [];
+    const docsMoneda = new Map<string, any>();
+    for (const p of comprasDoc) {
+      if (p.moneda_codigo && p.moneda_codigo !== 'COP') {
+        docsMoneda.set(p.codigo, {
+          moneda_codigo: p.moneda_codigo,
+          tasa_cambio: Number(p.tasa_cambio),
+          valor_moneda_extranjera: Number(p.valor_moneda_extranjera),
+        });
+      }
+    }
+
     const movimientos = await this.lineRepo.find({
       where: { empresa_id: empresaId, tercero_id: terceroId },
       relations: ['cuenta_contable', 'asentado'],
@@ -174,6 +220,7 @@ export class CuentasPorPagarService {
       },
       creditos: creditos.map((c) => ({
         ...c,
+        ...docsMoneda.get(c.documento_origen || ''),
         cuotas: c.cuotas?.sort((a, b) => a.numero_cuota - b.numero_cuota),
       })),
       movimientos,
@@ -214,10 +261,36 @@ export class CuentasPorPagarService {
       });
     }
 
+    // Datos de moneda si la compra origen es en USD
+    let moneda: any = null;
+    if (credito.tipo_credito === TipoCredito.COMPRA && credito.documento_origen) {
+      const compra = await this.creditoRepo.manager.getRepository(Purchase).findOne({
+        where: { empresa_id: empresaId, codigo: credito.documento_origen },
+      });
+      if (compra && compra.moneda_codigo && compra.moneda_codigo !== 'COP') {
+        const tasaFactura = Number(compra.tasa_cambio) || 0;
+        const trm = await this.trmService.trmActual(empresaId);
+        const tasaHoy = trm.tasa || tasaFactura;
+        moneda = {
+          codigo: compra.moneda_codigo,
+          tasa_factura: tasaFactura,
+          valor_moneda_extranjera: Number(compra.valor_moneda_extranjera) || 0,
+          tasa_hoy: tasaHoy,
+          trm_desactualizada: trm.desactualizada,
+          saldo_moneda: tasaFactura > 0 ? round2(Number(credito.saldo) / tasaFactura) : 0,
+          saldo_esperado_cop:
+            tasaFactura > 0
+              ? round2((Number(credito.saldo) / tasaFactura) * tasaHoy)
+              : Number(credito.saldo),
+        };
+      }
+    }
+
     return {
       ...credito,
       cuotas: cuotasConMora,
       pago_minimo: this.calcularPagoMinimo(credito),
+      moneda,
     };
   }
 
@@ -236,13 +309,19 @@ export class CuentasPorPagarService {
       );
     }
 
-    return this.dataSource.transaction(async (manager) => {
+    const creditoId = await this.dataSource.transaction(async (manager) => {
       const creditoRepo = manager.getRepository(Credito);
       const cuotaRepo = manager.getRepository(CuotaCredito);
       const accountRepo = manager.getRepository(Account);
       const asentadoRepo = manager.getRepository(AccountingEntry);
       const contabilidadRepo = manager.getRepository(AccountingEntryLine);
       const empresaRepo = manager.getRepository(Company);
+
+      await assertPeriodoAbierto(
+        manager.getRepository(Cierre),
+        empresaId,
+        dto.fecha,
+      );
 
       const valorCuota = round2(dto.monto_total / dto.numero_cuotas);
       const dias = DIAS_POR_PERIODO[dto.periodo] || 30;
@@ -267,6 +346,8 @@ export class CuentasPorPagarService {
 
       const cuotas: CuotaCredito[] = [];
       const fechaBase = new Date(dto.fecha);
+      // Última cuota absorbe el residuo del redondeo para que Σcuotas = monto_total
+      const valorUltima = round2(dto.monto_total - valorCuota * (dto.numero_cuotas - 1));
       for (let i = 1; i <= dto.numero_cuotas; i++) {
         const fechaOportuna = new Date(fechaBase);
         if (dto.periodo === PeriodoCredito.MENSUAL) {
@@ -274,14 +355,15 @@ export class CuentasPorPagarService {
         } else {
           fechaOportuna.setDate(fechaOportuna.getDate() + dias * i);
         }
+        const valorI = i === dto.numero_cuotas ? valorUltima : valorCuota;
         cuotas.push(
           cuotaRepo.create({
             empresa_id: empresaId,
             credito_id: creditoGuardado.id,
             numero_cuota: i,
-            valor: valorCuota,
+            valor: valorI,
             abonado: 0,
-            saldo: valorCuota,
+            saldo: valorI,
             fecha_pago_oportuno: fechaOportuna.toISOString().split('T')[0],
             estado: EstadoCuota.PENDIENTE,
           }),
@@ -365,8 +447,12 @@ export class CuentasPorPagarService {
       await asentadoRepo.save(asentadoGuardado);
       await contabilidadRepo.save(lineas.map((l) => contabilidadRepo.create(l)));
 
-      return this.findCredito(creditoGuardado.id, empresaId);
+      return creditoGuardado.id;
     });
+
+    // findCredito usa el repositorio normal: debe llamarse DESPUÉS del
+    // commit, no dentro de la transacción (la fila aún no sería visible).
+    return this.findCredito(creditoId, empresaId);
   }
 
   // ============ REGISTRAR PAGO A PROVEEDOR ============
@@ -380,6 +466,12 @@ export class CuentasPorPagarService {
       const empresaRepo = manager.getRepository(Company);
       const asentadoRepo = manager.getRepository(AccountingEntry);
       const contabilidadRepo = manager.getRepository(AccountingEntryLine);
+
+      await assertPeriodoAbierto(
+        manager.getRepository(Cierre),
+        empresaId,
+        dto.fecha,
+      );
 
       const credito = await creditoRepo.findOne({
         where: { id: dto.credito_id, empresa_id: empresaId },
@@ -421,11 +513,80 @@ export class CuentasPorPagarService {
         throw new BadRequestException('El valor del pago debe ser mayor a cero');
       }
 
-      const pagarTodo = dto.pagar_todo || monto >= Number(credito.saldo);
-      const montoAplicar = pagarTodo ? round2(Number(credito.saldo)) : monto;
+      // Diferencia en cambio (NIIF 21): si la compra origen es en USD, el
+      // pago se aplica a las cuotas a la TRM de la factura. La diferencia
+      // entre el dinero pagado (a TRM de hoy) y el nominal aplicado va a
+      // resultado: pérdida 5.3.05 / ganancia 4.2.10.
+      let tasaPago = 0;
+      let tasaFactura = 0;
+      let montoNominal = monto;
+      if (credito.tipo_credito === TipoCredito.COMPRA && credito.documento_origen) {
+        const compraOrigen = await manager.getRepository(Purchase).findOne({
+          where: { empresa_id: empresaId, codigo: credito.documento_origen },
+        });
+        if (
+          compraOrigen &&
+          compraOrigen.moneda_codigo &&
+          compraOrigen.moneda_codigo !== 'COP' &&
+          Number(compraOrigen.tasa_cambio) > 1
+        ) {
+          tasaFactura = Number(compraOrigen.tasa_cambio);
+          tasaPago =
+            Number(dto.tasa_pago) ||
+            (await this.trmService.tasaParaFecha(empresaId, dto.fecha)) ||
+            tasaFactura;
+          montoNominal = round2((monto * tasaFactura) / tasaPago);
+        }
+      }
 
-      // Validar saldo del banco
-      if (montoAplicar > Number(banco.monto)) {
+      // Descuento recibido: parte del saldo que el proveedor condona sin pago.
+      // Contablemente es un ingreso: Cr 4.2.10.40 Descuentos comerciales.
+      const descuento = round2(Number(dto.descuento || 0));
+      if (descuento < 0) {
+        throw new BadRequestException('El descuento no puede ser negativo');
+      }
+
+      let cuentaDescuento: Account | null = null;
+      if (descuento > 0) {
+        cuentaDescuento = dto.cuenta_descuento_id
+          ? await accountRepo.findOne({
+              where: { id: dto.cuenta_descuento_id, empresa_id: empresaId },
+            })
+          : await this.buscarCuentaDescuento(accountRepo, empresaId);
+        if (!cuentaDescuento) {
+          throw new BadRequestException(
+            'No se encontró la cuenta de descuento recibido (4.2.10.40 Descuentos comerciales condicionados)',
+          );
+        }
+      }
+
+      const saldoCredito = round2(Number(credito.saldo));
+      const pagarTodo =
+        dto.pagar_todo || round2(montoNominal + descuento) >= saldoCredito;
+      const montoAplicar = pagarTodo
+        ? round2(Math.max(0, saldoCredito - descuento))
+        : montoNominal;
+      const descuentoAplicar = Math.min(descuento, round2(saldoCredito - montoAplicar));
+
+      // Diferencia en cambio: dinero real pagado menos el nominal aplicado
+      const diferenciaCambio = tasaFactura > 0 ? round2(monto - montoAplicar) : 0;
+
+      // Comisión bancaria que el banco cobra sobre el pago (Art. 476 E.T.:
+      // excluida de IVA por defecto; gravada → IVA 19% descontable) y
+      // GMF 4x1000 (0.4%) como gasto bancario. Se pagan ADEMÁS del valor.
+      const brutoBanco = round2(montoAplicar + diferenciaCambio); // salida al proveedor
+      const comisionPct = Number(dto.comision_porcentaje) || 0;
+      if (comisionPct < 0) {
+        throw new BadRequestException('La comisión no puede ser negativa');
+      }
+      const comision = round2(brutoBanco * (comisionPct / 100));
+      const ivaComision =
+        dto.comision_gravada && comision > 0 ? round2(comision * 0.19) : 0;
+      const gmf = dto.aplicar_gmf ? round2(brutoBanco * 0.004) : 0;
+      const salidaTotal = round2(brutoBanco + comision + ivaComision + gmf);
+
+      // Validar saldo del banco con la salida real (incluye diferencia y gastos)
+      if (salidaTotal > Number(banco.monto)) {
         throw new BadRequestException(
           `El banco ${banco.nombre} no tiene saldo suficiente. Disponible: ${banco.monto}`,
         );
@@ -451,6 +612,7 @@ export class CuentasPorPagarService {
       // Distribuir pago entre cuotas
       // Orden: primero se cubre el interés acumulado, luego el saldo de la cuota
       let restante = montoAplicar;
+      let interesPagado = 0;
       const cuotasActualizadas: CuotaCredito[] = [];
 
       for (const cuota of cuotas) {
@@ -462,6 +624,7 @@ export class CuentasPorPagarService {
           const aplicarInteres = Math.min(restante, interesPendiente);
           cuota.interes_acumulado = round2(interesPendiente - aplicarInteres);
           restante = round2(restante - aplicarInteres);
+          interesPagado = round2(interesPagado + aplicarInteres);
         }
 
         if (restante <= 0) {
@@ -490,10 +653,44 @@ export class CuentasPorPagarService {
         restante = round2(restante - aplicar);
       }
 
+      // Distribuir el descuento recibido sobre el saldo restante de las cuotas
+      let restanteDescuento = descuentoAplicar;
+      for (const cuota of cuotas) {
+        if (restanteDescuento <= 0) break;
+        const saldoCuota = round2(Number(cuota.saldo));
+        if (saldoCuota <= 0) continue;
+        const d = Math.min(restanteDescuento, saldoCuota);
+        cuota.saldo = round2(saldoCuota - d);
+        cuota.fecha_pago_efectivo = dto.fecha;
+        if (cuota.saldo <= 0) {
+          cuota.estado = EstadoCuota.PAGADA;
+        }
+        if (!cuotasActualizadas.includes(cuota)) {
+          cuotasActualizadas.push(cuota);
+        }
+        restanteDescuento = round2(restanteDescuento - d);
+      }
+
       await cuotaRepo.save(cuotasActualizadas);
 
-      // Actualizar crédito
-      credito.saldo = round2(Number(credito.saldo) - montoAplicar);
+      // Cuenta de gasto financiero para el interés pagado (5.3.05.20 Intereses)
+      let cuentaInteres: Account | null = null;
+      if (interesPagado > 0) {
+        cuentaInteres = await this.buscarCuentaInteresGasto(accountRepo, empresaId);
+        if (!cuentaInteres) {
+          throw new BadRequestException(
+            'Se pagó interés moratorio pero no se encontró la cuenta de gasto 5.3.05.20 Intereses en el PUC',
+          );
+        }
+        if (cuentaInteres.naturaleza !== 'D') {
+          throw new BadRequestException(
+            `La cuenta ${cuentaInteres.codigo} ${cuentaInteres.nombre} debe tener naturaleza Débito (es un gasto)`,
+          );
+        }
+      }
+
+      // Actualizar crédito (saldo baja por el pago + el descuento recibido)
+      credito.saldo = round2(saldoCredito - montoAplicar - descuentoAplicar);
       credito.fecha_ultimo_pago = dto.fecha;
       const cuotasPagadasTotal = await cuotaRepo.count({
         where: { credito_id: credito.id, estado: EstadoCuota.PAGADA },
@@ -506,8 +703,8 @@ export class CuentasPorPagarService {
       }
       await creditoRepo.save(credito);
 
-      // Descontar banco
-      banco.monto = round2(Number(banco.monto) - montoAplicar);
+      // Descontar banco (salida real: valor + comisión + IVA + GMF)
+      banco.monto = round2(Number(banco.monto) - salidaTotal);
       await bancoRepo.save(banco);
 
       // Asiento contable (espejo: débito a cuenta por pagar, crédito a banco)
@@ -518,6 +715,7 @@ export class CuentasPorPagarService {
 
       const consecutivo = 'PP' + empresa.consecutivo_asientos.toString().padStart(6, '0');
       const descripcion = dto.descripcion || `Pago a ${proveedor.nombre} - Crédito #${credito.id}`;
+      const totalAplicado = round2(montoAplicar + descuentoAplicar);
 
       const asentado = asentadoRepo.create({
         empresa_id: empresaId,
@@ -525,45 +723,199 @@ export class CuentasPorPagarService {
         tipo: dto.tipo_comprobante_id,
         fecha: dto.fecha,
         descripcion,
-        total_debito: montoAplicar,
-        total_credito: montoAplicar,
+        total_debito: totalAplicado,
+        total_credito: totalAplicado,
         usuario,
         estado: 1,
       });
       const asentadoGuardado = await asentadoRepo.save(asentado);
 
-      const lineas: Partial<AccountingEntryLine>[] = [
-        {
+      // Cuenta de diferencia en cambio: pagar de más por TRM mayor es
+      // pérdida (5.3.05); pagar de menos es ganancia (4.2.10).
+      let cuentaDif: Account | null = null;
+      if (diferenciaCambio !== 0) {
+        cuentaDif = await cuentaDiferenciaCambio(
+          accountRepo,
+          empresaId,
+          diferenciaCambio < 0, // pagar menos = ganancia → ingreso
+        );
+      }
+
+      // Cuentas de gasto bancario (se validan solo si aplican)
+      let cuentaComision: Account | null = null;
+      if (comision > 0) {
+        cuentaComision = await cuentaGastoBancario(accountRepo, empresaId, 'comision');
+      }
+      let cuentaIvaDescontable: Account | null = null;
+      if (ivaComision > 0) {
+        cuentaIvaDescontable = await requireAccountByKeywords(
+          accountRepo,
+          empresaId,
+          ['2408', 'iva descontable', 'iva debito'],
+          'IVA descontable sobre comisión bancaria',
+        );
+      }
+      let cuentaGmf: Account | null = null;
+      if (gmf > 0) {
+        cuentaGmf = await cuentaGastoBancario(accountRepo, empresaId, 'gmf');
+      }
+
+      const montoTercero = round2(totalAplicado - interesPagado);
+      const lineas: Partial<AccountingEntryLine>[] = [];
+      if (diferenciaCambio > 0 && cuentaDif) {
+        lineas.push({
           empresa_id: empresaId,
           asentado_id: asentadoGuardado.id,
-          cuenta_contable_id: proveedor.cuenta_contable_id,
+          cuenta_contable_id: cuentaDif.id,
           tercero_id: proveedor.id,
-          descripcion: `Pago a ${proveedor.nombre}`,
-          valor: montoAplicar,
-          debito: montoAplicar,
+          descripcion: `Diferencia en cambio ${credito.documento_origen} (TRM ${tasaFactura} -> ${tasaPago})`,
+          valor: diferenciaCambio,
+          debito: diferenciaCambio,
           credito: 0,
           naturaleza: 'D',
           consecutivo,
           fecha: dto.fecha,
           usuario,
           estado: 1,
-        },
-        {
+        });
+      }
+      if (montoTercero > 0) {
+        lineas.push({
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
+          cuenta_contable_id: proveedor.cuenta_contable_id,
+          tercero_id: proveedor.id,
+          descripcion: `Pago a ${proveedor.nombre}`,
+          valor: montoTercero,
+          debito: montoTercero,
+          credito: 0,
+          naturaleza: 'D',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        });
+      }
+      if (interesPagado > 0 && cuentaInteres) {
+        lineas.push({
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
+          cuenta_contable_id: cuentaInteres.id,
+          tercero_id: proveedor.id,
+          descripcion: `Interés moratorio pagado a ${proveedor.nombre}`,
+          valor: interesPagado,
+          debito: interesPagado,
+          credito: 0,
+          naturaleza: 'D',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        });
+      }
+      if (comision > 0 && cuentaComision) {
+        lineas.push({
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
+          cuenta_contable_id: cuentaComision.id,
+          tercero_id: proveedor.id,
+          descripcion: `Comisión bancaria ${comisionPct}% pago ${credito.documento_origen || '#' + credito.id}`,
+          valor: comision,
+          debito: comision,
+          credito: 0,
+          naturaleza: 'D',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        });
+      }
+      if (ivaComision > 0 && cuentaIvaDescontable) {
+        lineas.push({
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
+          cuenta_contable_id: cuentaIvaDescontable.id,
+          tercero_id: proveedor.id,
+          descripcion: `IVA 19% sobre comisión bancaria`,
+          valor: ivaComision,
+          debito: ivaComision,
+          credito: 0,
+          naturaleza: 'D',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        });
+      }
+      if (gmf > 0 && cuentaGmf) {
+        lineas.push({
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
+          cuenta_contable_id: cuentaGmf.id,
+          tercero_id: proveedor.id,
+          descripcion: `GMF 4x1000 pago ${credito.documento_origen || '#' + credito.id}`,
+          valor: gmf,
+          debito: gmf,
+          credito: 0,
+          naturaleza: 'D',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        });
+      }
+      if (salidaTotal > 0) {
+        lineas.push({
           empresa_id: empresaId,
           asentado_id: asentadoGuardado.id,
           cuenta_contable_id: bancoCuenta.id,
           tercero_id: proveedor.id,
           descripcion: `Salida banco/caja pago a ${proveedor.nombre}`,
-          valor: montoAplicar,
+          valor: salidaTotal,
           debito: 0,
-          credito: montoAplicar,
+          credito: salidaTotal,
           naturaleza: 'C',
           consecutivo,
           fecha: dto.fecha,
           usuario,
           estado: 1,
-        },
-      ];
+        });
+      }
+      if (diferenciaCambio < 0 && cuentaDif) {
+        const v = Math.abs(diferenciaCambio);
+        lineas.push({
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
+          cuenta_contable_id: cuentaDif.id,
+          tercero_id: proveedor.id,
+          descripcion: `Diferencia en cambio ${credito.documento_origen} (TRM ${tasaFactura} -> ${tasaPago})`,
+          valor: v,
+          debito: 0,
+          credito: v,
+          naturaleza: 'C',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        });
+      }
+      if (descuentoAplicar > 0 && cuentaDescuento) {
+        lineas.push({
+          empresa_id: empresaId,
+          asentado_id: asentadoGuardado.id,
+          cuenta_contable_id: cuentaDescuento.id,
+          tercero_id: proveedor.id,
+          descripcion: `Descuento recibido de ${proveedor.nombre}`,
+          valor: descuentoAplicar,
+          debito: 0,
+          credito: descuentoAplicar,
+          naturaleza: 'C',
+          consecutivo,
+          fecha: dto.fecha,
+          usuario,
+          estado: 1,
+        });
+      }
 
       const balance = assertBalanced(lineas.map((l) => ({ debito: Number(l.debito || 0), credito: Number(l.credito || 0) })));
       asentadoGuardado.total_debito = balance.debito;
@@ -584,6 +936,12 @@ export class CuentasPorPagarService {
         credito: { id: credito.id, saldo: credito.saldo, estado: credito.estado },
         cuotas_pagadas: cuotasActualizadas.filter((c) => c.estado === EstadoCuota.PAGADA).length,
         monto_aplicado: montoAplicar,
+        descuento_aplicado: descuentoAplicar,
+        interes_pagado: interesPagado,
+        comision_aplicada: comision,
+        iva_comision: ivaComision,
+        gmf,
+        salida_banco: salidaTotal,
       };
     });
   }
@@ -623,7 +981,8 @@ export class CuentasPorPagarService {
       .where('cq.empresa_id = :empresaId', { empresaId })
       .andWhere('cq.estado != :pagada', { pagada: EstadoCuota.PAGADA })
       .andWhere('cr.tipo_credito IN (:...tipos)', { tipos: [TipoCredito.COMPRA, TipoCredito.MANUAL] })
-      .andWhere('cr.estado != :anulado', { anulado: EstadoCredito.ANULADO });
+      .andWhere('cr.estado != :anulado', { anulado: EstadoCredito.ANULADO })
+      .andWhere('(cr.tipo_credito = :compra OR t.tipo_terceros = 2)', { compra: TipoCredito.COMPRA });
 
     if (query?.incluir_posfechadas) {
       qb.andWhere(
@@ -710,6 +1069,8 @@ export class CuentasPorPagarService {
 
     const cuotas: CuotaCredito[] = [];
     const fechaBase = new Date(fecha);
+    // Última cuota absorbe el residuo del redondeo para que Σcuotas = monto
+    const valorUltima = round2(monto - valorCuota * (numeroCuotas - 1));
     for (let i = 1; i <= numeroCuotas; i++) {
       const fechaOportuna = new Date(fechaBase);
       if (periodo === PeriodoCredito.MENSUAL) {
@@ -717,14 +1078,15 @@ export class CuentasPorPagarService {
       } else {
         fechaOportuna.setDate(fechaOportuna.getDate() + dias * i);
       }
+      const valorI = i === numeroCuotas ? valorUltima : valorCuota;
       cuotas.push(
         cuotaRepo.create({
           empresa_id: empresaId,
           credito_id: creditoGuardado.id,
           numero_cuota: i,
-          valor: valorCuota,
+          valor: valorI,
           abonado: 0,
-          saldo: valorCuota,
+          saldo: valorI,
           fecha_pago_oportuno: fechaOportuna.toISOString().split('T')[0],
           estado: EstadoCuota.PENDIENTE,
         }),
@@ -823,5 +1185,152 @@ export class CuentasPorPagarService {
       cuentas.find((c) => /^1\.1/.test(c.codigo || '') || /^11/.test(c.codigo || '')) ||
       null
     );
+  }
+
+  /**
+   * Cuenta por defecto para el descuento recibido de proveedores:
+   * 1. 4.2.10.40 Descuentos comerciales condicionados (ingreso no operacional)
+   * 2. 4.2.10 Financieros / 4210
+   */
+  private async buscarCuentaDescuento(
+    accountRepo: Repository<Account>,
+    empresaId: number,
+  ): Promise<Account | null> {
+    const cuentas = await accountRepo.find({
+      where: { empresa_id: empresaId, estado: 1 },
+    });
+    const codigos = ['4.2.10.40', '4.2.10', '421040', '4210'];
+    for (const codigo of codigos) {
+      const found = cuentas.find(
+        (c) => c.codigo === codigo || (c.codigo || '').startsWith(codigo + '.'),
+      );
+      if (found) return found;
+    }
+    return null;
+  }
+
+  /**
+   * Cuenta de gasto financiero para intereses moratorios pagados:
+   * 5.3.05.20 Intereses (o la subcuenta 5.3.05.x disponible).
+   */
+  private async buscarCuentaInteresGasto(
+    accountRepo: Repository<Account>,
+    empresaId: number,
+  ): Promise<Account | null> {
+    const cuentas = await accountRepo.find({
+      where: { empresa_id: empresaId, estado: 1 },
+    });
+    const codigos = ['5.3.05.20', '5.3.05', '530520', '5305'];
+    for (const codigo of codigos) {
+      const found = cuentas.find(
+        (c) => c.codigo === codigo || (c.codigo || '').startsWith(codigo + '.'),
+      );
+      if (found) return found;
+    }
+    return null;
+  }
+
+  // ============ ANÁLISIS DE VENCIMIENTO CxP (ficha de vencimiento) ============
+
+  /**
+   * Clasifica las obligaciones con proveedores por rangos de días vencidos.
+   * A diferencia de cartera, aquí no hay provisión: los pasivos no se
+   * deterioran; el reporte sirve para programación de pagos y liquidez.
+   */
+  async analisisVencimiento(empresaId: number) {
+    const cuotas = await this.cuotaRepo
+      .createQueryBuilder('cq')
+      .leftJoinAndSelect('cq.credito', 'cr')
+      .leftJoinAndSelect('cr.tercero', 't')
+      .where('cq.empresa_id = :empresaId', { empresaId })
+      .andWhere('cq.estado != :pagada', { pagada: EstadoCuota.PAGADA })
+      .andWhere('cq.saldo > 0')
+      .andWhere('cr.tipo_credito IN (:...tipos)', {
+        tipos: [TipoCredito.COMPRA, TipoCredito.MANUAL],
+      })
+      .andWhere('cr.estado != :anulado', { anulado: EstadoCredito.ANULADO })
+      .andWhere('(cr.tipo_credito = :compra OR t.tipo_terceros = 2)', {
+        compra: TipoCredito.COMPRA,
+      })
+      .getMany();
+
+    const mapa = new Map<number, any>();
+    const totales = this.bucketsVacios();
+    let totalGeneral = 0;
+    let interesTotal = 0;
+
+    for (const cq of cuotas) {
+      const tercero = cq.credito?.tercero;
+      if (!tercero) continue;
+
+      const diasMora = this.calcularDiasMora(
+        cq.fecha_pago_oportuno,
+        cq.fecha_posfechada,
+      );
+      const tasaMora = Number(cq.credito.tasa_mora) || 0;
+      const interes = await this.acumularInteres(cq, tasaMora);
+      const bucket = this.bucketPorDias(diasMora);
+      const saldo = round2(Number(cq.saldo));
+
+      if (!mapa.has(tercero.id)) {
+        mapa.set(tercero.id, {
+          tercero_id: tercero.id,
+          nombre: tercero.nombre || '',
+          documento: tercero.documento || '',
+          buckets: this.bucketsVacios(),
+          interes_mora: 0,
+          total: 0,
+          dias_mora_max: 0,
+        });
+      }
+
+      const e = mapa.get(tercero.id);
+      e.buckets[bucket] = round2(e.buckets[bucket] + saldo);
+      e.interes_mora = round2(e.interes_mora + interes);
+      e.total = round2(e.total + saldo);
+      if (diasMora > e.dias_mora_max) e.dias_mora_max = diasMora;
+
+      totales[bucket] = round2(totales[bucket] + saldo);
+      totalGeneral = round2(totalGeneral + saldo);
+      interesTotal = round2(interesTotal + interes);
+    }
+
+    const data = Array.from(mapa.values()).sort((a, b) => b.total - a.total);
+
+    return {
+      data,
+      totales,
+      total_general: totalGeneral,
+      interes_total: interesTotal,
+      proveedores: data.length,
+      rangos: [
+        'al_dia', 'd1_30', 'd31_60', 'd61_90',
+        'd91_180', 'd181_360', 'd361_720', 'mas_720',
+      ],
+    };
+  }
+
+  private bucketsVacios() {
+    return {
+      al_dia: 0,
+      d1_30: 0,
+      d31_60: 0,
+      d61_90: 0,
+      d91_180: 0,
+      d181_360: 0,
+      d361_720: 0,
+      mas_720: 0,
+    };
+  }
+
+  private bucketPorDias(dias: number): string {
+    if (dias <= 0) return 'al_dia';
+    if (dias <= 30) return 'd1_30';
+    if (dias <= 60) return 'd31_60';
+    if (dias <= 90) return 'd61_90';
+    if (dias <= 180) return 'd91_180';
+    if (dias <= 360) return 'd181_360';
+    if (dias <= 720) return 'd361_720';
+    return 'mas_720';
   }
 }

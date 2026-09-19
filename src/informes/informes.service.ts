@@ -745,11 +745,11 @@ export class InformesService {
   }
 
   // ===========================================================================
-  // BALANCE GENERAL
+  // ESTADO DE SITUACIÓN FINANCIERA (antes "Balance General", NIC 1 / NIIF)
   // ===========================================================================
 
   /**
-   * Balance General con jerarquía PUC, naturaleza contable y Resultado del Ejercicio.
+   * Estado de Situación Financiera con jerarquía PUC, naturaleza contable y Resultado del Ejercicio.
    *
    * PROBLEMAS CORREGIDOS:
    *
@@ -777,7 +777,7 @@ export class InformesService {
    *   - Clases 2, 3, 4    (naturaleza Crédito): Saldo = Crédito - Débito
    */
   /**
-   * Genera el Balance General con jerarquía PUC, naturaleza contable y
+   * Genera el Estado de Situación Financiera con jerarquía PUC, naturaleza contable y
    * Resultado del Ejercicio inyectado como cuenta virtual.
    *
    * @param query - Parámetros: date (fecha inicial), date2 (fecha final)
@@ -833,7 +833,7 @@ export class InformesService {
     // =========================================================================
     // 2. Agregación SQL de movimientos por cuenta (solo auxiliares tienen movs)
     //
-    // Prioridad 1: El Balance General es un saldo ACUMULADO a una fecha de
+    // Prioridad 1: El Estado de Situación Financiera es un saldo ACUMULADO a una fecha de
     // corte, no un movimiento de un periodo. Por eso se ignora explícitamente
     // el parámetro `date` y solo se filtra `c.fecha <= :date2`.
     // Si `date` llega en la query, no se usa: no es un descuido, es una
@@ -987,7 +987,7 @@ export class InformesService {
     // =========================================================================
     // 6. Calcular Resultado del Ejercicio (Ingresos - Costos - Gastos)
     //
-    // El balance general no incluye las clases 4, 5, 6 (cuentas nominales),
+    // El Estado de Situación Financiera no incluye las clases 4, 5, 6 (cuentas nominales),
     // pero la utilidad/pérdida del periodo debe reflejarse en el Patrimonio
     // (Clase 3) para que la ecuación patrimonial se cumpla:
     //     Activo = Pasivo + Patrimonio

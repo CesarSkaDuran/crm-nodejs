@@ -13,6 +13,7 @@ import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { Account } from '../accounts/entities/account.entity';
 import { Categoria } from '../categorias/entities/categoria.entity';
+import { Kardex } from '../kardex/entities/kardex.entity';
 
 @Injectable()
 export class ProductsService {
@@ -23,6 +24,8 @@ export class ProductsService {
     private readonly accountRepo: Repository<Account>,
     @InjectRepository(Categoria)
     private readonly categoriaRepo: Repository<Categoria>,
+    @InjectRepository(Kardex)
+    private readonly kardexRepo: Repository<Kardex>,
   ) {}
 
   /**
@@ -358,6 +361,12 @@ export class ProductsService {
       prodMap.set(p.codigo, p);
     }
 
+    // Consecutivo para los movimientos de kardex que genera la importación
+    let consecutivoImp = await this.kardexRepo.count({
+      where: { empresa_id: empresaId, tipo_documento: 'importacion' },
+    });
+    const hoy = new Date().toISOString().split('T')[0];
+
     for (let i = 0; i < filas.length; i++) {
       const fila = filas[i];
       const filaNum = i + 2; // +2 porque la fila 1 es el header
@@ -393,6 +402,19 @@ export class ProductsService {
           categoriaId = cat.id;
         }
 
+        // Stock: solo se toca si la columna viene en la fila. Si viene con
+        // un valor distinto al actual se registra un movimiento de kardex
+        // (tipo "importacion") — el stock nunca cambia sin trazabilidad.
+        const filaTieneStock =
+          fila.stock !== undefined &&
+          fila.stock !== null &&
+          String(fila.stock).trim() !== '';
+        const stockImportado = filaTieneStock ? Number(fila.stock) : undefined;
+        if (filaTieneStock && (isNaN(stockImportado!) || stockImportado! < 0)) {
+          errores.push({ fila: filaNum, error: 'Stock inválido (debe ser un número >= 0)' });
+          continue;
+        }
+
         // Construir DTO
         const dto: any = {
           codigo,
@@ -402,7 +424,7 @@ export class ProductsService {
           referencia: (fila.referencia ?? '').toString().trim() || undefined,
           unidad_medida: (fila.unidad_medida ?? '').toString().trim() || undefined,
           grupo: (fila.grupo ?? '').toString().trim() || undefined,
-          stock: Number(fila.stock || 0),
+          stock: stockImportado ?? 0,
           stock_min: Number(fila.stock_min || 0),
           ultimo_precio: Number(fila.ultimo_precio || 0),
           margen: Number(fila.margen || 0),
@@ -424,14 +446,36 @@ export class ProductsService {
 
         const existente = prodMap.get(codigo);
         if (existente) {
-          // Actualizar
+          // Actualizar: si la fila no trae stock, conservar el actual
+          // (una actualización de catálogo no debe reiniciar inventario)
+          if (!filaTieneStock) {
+            delete dto.stock;
+          }
+          const stockAnterior = Number(existente.stock || 0);
+          const saldoAnterior = Number(existente.saldo_inventario || 0);
+          const promedioAnterior = Number(existente.promedio || 0);
           Object.assign(existente, dto);
+          if (filaTieneStock) {
+            await this.movimientoImportacion(
+              existente, empresaId, stockAnterior, saldoAnterior,
+              promedioAnterior, stockImportado!, dto.ultimo_precio, hoy,
+              `IMP${String(++consecutivoImp).padStart(6, '0')}`,
+            );
+          }
           await this.repo.save(existente);
           actualizados++;
         } else {
           // Crear
           const producto = this.repo.create({ ...dto, empresa_id: empresaId } as any) as unknown as Product;
           const guardado = await this.repo.save(producto);
+          if (filaTieneStock && stockImportado! > 0) {
+            await this.movimientoImportacion(
+              guardado, empresaId, 0, 0, 0,
+              stockImportado!, dto.ultimo_precio, hoy,
+              `IMP${String(++consecutivoImp).padStart(6, '0')}`,
+            );
+            await this.repo.save(guardado);
+          }
           prodMap.set(codigo, guardado);
           creados++;
         }
@@ -444,6 +488,66 @@ export class ProductsService {
     }
 
     return { creados, actualizados, errores, total: filas.length };
+  }
+
+  /**
+   * Registra el movimiento de kardex de una importación masiva y deja
+   * consistentes stock / saldo_inventario / promedio del producto.
+   * El valor se calcula al costo (ultimo_precio) o al promedio actual.
+   * No genera asiento contable: para dar de alta inventario con
+   * contrapartida contable se usa Inventario físico o una compra.
+   */
+  private async movimientoImportacion(
+    producto: Product,
+    empresaId: number,
+    stockAnterior: number,
+    saldoAnterior: number,
+    promedioAnterior: number,
+    stockNuevo: number,
+    costoImportado: number,
+    fecha: string,
+    consecutivo: string,
+  ) {
+    const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const r4 = (n: number) => Math.round((n + Number.EPSILON) * 10000) / 10000;
+
+    const costoRef =
+      promedioAnterior > 0 ? promedioAnterior : Number(costoImportado) || 0;
+    const diff = r2(stockNuevo - stockAnterior);
+    if (diff === 0) {
+      producto.saldo_inventario = r2(stockNuevo * costoRef);
+      producto.promedio = stockNuevo > 0 ? costoRef : 0;
+      return;
+    }
+
+    const esEntrada = diff > 0;
+    const valor = r2(Math.abs(diff) * costoRef);
+    const saldoActual = r2(esEntrada ? saldoAnterior + valor : saldoAnterior - valor);
+    producto.saldo_inventario = saldoActual;
+    producto.promedio = stockNuevo > 0 ? r4(saldoActual / stockNuevo) : 0;
+
+    await this.kardexRepo.save(
+      this.kardexRepo.create({
+        empresa_id: empresaId,
+        producto_id: producto.id,
+        tipo_documento: 'importacion',
+        consecutivo,
+        fecha,
+        cantidad_anterior: stockAnterior,
+        saldo_anterior: saldoAnterior,
+        promedio_anterior: promedioAnterior,
+        valor_unitario: costoRef,
+        entradas: esEntrada ? diff : 0,
+        salidas: esEntrada ? 0 : Math.abs(diff),
+        valor_entradas: esEntrada ? valor : 0,
+        valor_salidas: esEntrada ? 0 : valor,
+        total: valor,
+        cantidad_actual: stockNuevo,
+        saldo_actual: saldoActual,
+        promedio_actual: producto.promedio,
+        estado: 1,
+      }),
+    );
   }
 
   private buscarCuenta(cuentas: Account[], keywords: string[]) {

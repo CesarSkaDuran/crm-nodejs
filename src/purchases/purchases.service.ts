@@ -14,16 +14,20 @@ import { Company } from '../companies/entities/company.entity';
 import { Account } from '../accounts/entities/account.entity';
 import { Banco } from '../bancos/entities/banco.entity';
 import { Kardex } from '../kardex/entities/kardex.entity';
+import { Moneda } from '../monedas/entities/moneda.entity';
 import {
   AccountingEntry,
   AccountingEntryLine,
 } from '../accounting/entities/accounting-entry.entity';
 import {
   assertBalanced,
+  assertPeriodoAbierto,
   requireAccountByKeywords,
   resolveBancoCuenta,
+  resolverMonedaDocumento,
   round2,
 } from '../accounting/accounting-helpers';
+import { Cierre } from '../cierres/entities/cierre.entity';
 import { CuentasPorPagarService } from '../cuentas-por-pagar/cuentas-por-pagar.service';
 import { PeriodoCredito } from '../cartera/entities/credito.entity';
 import { CierresService } from '../cierres/cierres.service';
@@ -110,6 +114,37 @@ export class PurchasesService {
         throw new BadRequestException(
           'La cuenta contable del proveedor no existe en esta empresa',
         );
+      }
+
+      // --- Conversión de moneda extranjera (NIIF 21) ---
+      // Si el documento es en USD, los valores del DTO (costo_unitario por
+      // línea, flete, retención) vienen en USD y se convierten a COP.
+      const conv = await resolverMonedaDocumento(
+        manager.getRepository(Moneda),
+        empresaId,
+        dto.moneda_id,
+        dto.tasa_cambio,
+      );
+      let valorMonedaExtranjera = 0;
+      if (conv?.esExtranjera) {
+        const tasa = conv.tasa;
+        let baseUsd = 0;
+        let impUsd = 0;
+        for (const item of dto.detalles) {
+          const bruto = Number(item.cantidad) * Number(item.costo_unitario);
+          const neto = bruto - (bruto * Number(item.descuento || 0)) / 100;
+          baseUsd += neto;
+          impUsd += (neto * Number(item.impuesto || 0)) / 100;
+        }
+        valorMonedaExtranjera = round2(
+          baseUsd + impUsd + Number(dto.flete || 0) - Number(dto.retencion || 0),
+        );
+        dto.detalles = dto.detalles.map((d) => ({
+          ...d,
+          costo_unitario: round2(Number(d.costo_unitario) * tasa),
+        }));
+        dto.flete = round2(Number(dto.flete || 0) * tasa);
+        dto.retencion = round2(Number(dto.retencion || 0) * tasa);
       }
 
       const codigoCompra = await this.obtenerConsecutivoAtomico(
@@ -284,6 +319,11 @@ export class PurchasesService {
         modo: dto.modo ?? 1,
         forma: dto.forma,
         estado: 1,
+        moneda_id: conv?.moneda.id ?? null,
+        moneda_codigo: conv?.moneda.codigo ?? 'COP',
+        tasa_cambio: conv?.tasa ?? 1,
+        valor_moneda_extranjera: valorMonedaExtranjera,
+        valor_cop: round2(total),
       });
       const compraGuardada = await compraRepo.save(compra);
 
@@ -575,6 +615,12 @@ export class PurchasesService {
     if (compra.estado === 0) {
       throw new BadRequestException('La compra ya está anulada');
     }
+    // La reversa de la compra altera el período de la factura original
+    await assertPeriodoAbierto(
+      this.compraRepo.manager.getRepository(Cierre),
+      empresaId,
+      compra.fecha,
+    );
 
     return this.dataSource.transaction(async (manager) => {
       const compraRepo = manager.getRepository(Purchase);

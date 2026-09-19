@@ -2,11 +2,11 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsDateString, IsOptional } from 'class-validator';
 
 /**
- * Query params para el Balance General.
+ * Query params para el Estado de Situación Financiera (Balance General, NIC 1).
  *
  * Endpoint: GET /api/v1/informes/balance
  *
- * IMPORTANTE: El Balance General representa un saldo ACUMULADO a una fecha
+ * IMPORTANTE: El Estado de Situación Financiera representa un saldo ACUMULADO a una fecha
  * de corte, NO un movimiento de un periodo. Por eso:
  *   - `date2` se usa como fecha de corte (c.fecha <= date2).
  *   - `date` se IGNORA explícitamente (decisión de diseño contable).

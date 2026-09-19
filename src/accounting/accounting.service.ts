@@ -10,7 +10,9 @@ import {
   AccountingEntryLine,
 } from './entities/accounting-entry.entity';
 import { Account } from '../accounts/entities/account.entity';
+import { Cierre } from '../cierres/entities/cierre.entity';
 import { CreateAsentadoDto } from './dto/create-accounting-entry.dto';
+import { assertPeriodoAbierto } from './accounting-helpers';
 
 @Injectable()
 export class AccountingService {
@@ -149,6 +151,12 @@ export class AccountingService {
   }
 
   async create(dto: CreateAsentadoDto, empresaId: number, usuario: string) {
+    await assertPeriodoAbierto(
+      this.entryRepo.manager.getRepository(Cierre),
+      empresaId,
+      dto.fecha,
+    );
+
     const detalles: AccountingEntryLine[] = [];
     let totalDebito = 0;
     let totalCredito = 0;
@@ -228,6 +236,11 @@ export class AccountingService {
 
   async remove(id: number, empresaId: number) {
     const entry = await this.findOne(id, empresaId);
+    await assertPeriodoAbierto(
+      this.entryRepo.manager.getRepository(Cierre),
+      empresaId,
+      entry.fecha,
+    );
     await this.entryRepo.remove(entry);
   }
 }

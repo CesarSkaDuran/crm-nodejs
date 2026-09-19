@@ -61,6 +61,64 @@ export class ReportesController {
     );
   }
 
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
+  @Get('flujo-caja-proyectado')
+  flujoCajaProyectado(
+    @Query('horizonte') horizonte: string,
+    @Query('granularidad') granularidad: 'semana' | 'mes',
+    @Query('incluir_recurrentes') incluirRecurrentes: string,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.reportesService.flujoCajaProyectado(
+      usuario.empresa_id,
+      Number(horizonte) || 3,
+      granularidad === 'semana' ? 'semana' : 'mes',
+      incluirRecurrentes !== 'false',
+    );
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
+  @Get('iva')
+  iva(
+    @Query('fecha_inicio') fechaInicio: string,
+    @Query('fecha_fin') fechaFin: string,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.reportesService.reporteIva(
+      usuario.empresa_id,
+      fechaInicio || '1900-01-01',
+      fechaFin || '2999-12-31',
+    );
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
+  @Get('retenciones')
+  retenciones(
+    @Query('fecha_inicio') fechaInicio: string,
+    @Query('fecha_fin') fechaFin: string,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.reportesService.reporteRetenciones(
+      usuario.empresa_id,
+      fechaInicio || '1900-01-01',
+      fechaFin || '2999-12-31',
+    );
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
+  @Get('diferencia-cambio')
+  diferenciaCambio(
+    @Query('fecha_inicio') fechaInicio: string,
+    @Query('fecha_fin') fechaFin: string,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.reportesService.reporteDiferenciaCambio(
+      usuario.empresa_id,
+      fechaInicio || '1900-01-01',
+      fechaFin || '2999-12-31',
+    );
+  }
+
   @Roles(UserRole.ADMIN, UserRole.CONTADOR, UserRole.VENDEDOR)
   @Get('analisis-cartera')
   analisisCartera(

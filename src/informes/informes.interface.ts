@@ -212,7 +212,7 @@ export type LibroLineaResultado =
 
 
 /**
- * Respuesta del Balance General.
+ * Respuesta del Estado de Situación Financiera (Balance General).
  */
 export interface BalanceGeneralResponse {
   data: BalanceGeneralFila[];
@@ -229,7 +229,7 @@ export interface BalanceGeneralResponse {
 }
 
 /**
- * Fila del Balance General.
+ * Fila del Estado de Situación Financiera (Balance General).
  */
 export interface BalanceGeneralFila {
   id: number;

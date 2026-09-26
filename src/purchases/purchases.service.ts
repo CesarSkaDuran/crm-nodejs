@@ -630,6 +630,8 @@ export class PurchasesService {
       const asentadoRepo = manager.getRepository(AccountingEntry);
       const contabilidadRepo = manager.getRepository(AccountingEntryLine);
       const kardexRepo = manager.getRepository(Kardex);
+      const bancoRepo = manager.getRepository(Banco);
+      const cuentaRepo = manager.getRepository(Account);
 
       // 1. Restar stock y revertir costo promedio ponderado
       const detalles = await detalleRepo.find({ where: { compra_id: id } });
@@ -754,6 +756,44 @@ export class PurchasesService {
         const lineasOriginales = await contabilidadRepo.find({
           where: { asentado_id: asientoOriginal.id },
         });
+        const lineaPagoBanco = lineasOriginales.find(
+          (linea) => /^Pago contado\s+/i.test(linea.descripcion || '') && Number(linea.credito) > 0,
+        );
+
+        if (lineaPagoBanco) {
+          const cuentaPago = await cuentaRepo.findOne({
+            where: { id: lineaPagoBanco.cuenta_contable_id, empresa_id: empresaId },
+          });
+          if (!cuentaPago) {
+            throw new BadRequestException(
+              `No se encontró la cuenta contable del pago original de la compra ${compra.codigo}.`,
+            );
+          }
+          const nombreBanco = lineaPagoBanco.descripcion.replace(/^Pago contado\s+/i, '').trim();
+          const bancos = await bancoRepo.find({ where: { empresa_id: empresaId } });
+          const coincideCuenta = (banco: Banco) => {
+            const ref = String(banco.cuenta_id || '').trim();
+            const codigoCuenta = String(cuentaPago?.codigo || '').trim();
+            return ref === String(cuentaPago?.id) || ref === codigoCuenta ||
+              ref.replace(/\./g, '') === codigoCuenta.replace(/\./g, '');
+          };
+          const bancoPorNombre = bancos.find(
+            (banco) => banco.nombre.trim().toLowerCase() === nombreBanco.toLowerCase(),
+          );
+          const bancosPorCuenta = bancos.filter(coincideCuenta);
+          const banco = bancoPorNombre
+            ? (coincideCuenta(bancoPorNombre) ? bancoPorNombre : null)
+            : bancosPorCuenta.length === 1 ? bancosPorCuenta[0] : null;
+
+          if (!banco) {
+            throw new BadRequestException(
+              `No se pudo identificar el banco/caja original de la compra ${compra.codigo}; revise el nombre y la cuenta contable de Bancos.`,
+            );
+          }
+
+          banco.monto = round2(Number(banco.monto) + Number(lineaPagoBanco.credito));
+          await bancoRepo.save(banco);
+        }
 
         lineasReversion = lineasOriginales.map((l) => ({
           empresa_id: empresaId,

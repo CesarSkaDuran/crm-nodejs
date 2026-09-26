@@ -2,7 +2,6 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsInt,
   IsNotEmpty,
-  IsNumber,
   IsOptional,
   IsString,
 } from 'class-validator';
@@ -12,16 +11,6 @@ export class CreateBancoDto {
   @IsString()
   @IsNotEmpty()
   nombre: string;
-
-  @ApiPropertyOptional({ example: 0 })
-  @IsNumber()
-  @IsOptional()
-  monto?: number;
-
-  @ApiPropertyOptional({ example: 0 })
-  @IsNumber()
-  @IsOptional()
-  monto_dia?: number;
 
   @ApiPropertyOptional({ example: 1 })
   @IsInt()

@@ -16,6 +16,13 @@ export enum Naturaleza {
   CREDITO = 'C',
 }
 
+/**
+ * empresa_id = 0 identifica las cuentas del Plan Único de Cuentas base,
+ * compartidas por todas las empresas. Las cuentas con empresa_id > 0 son
+ * especiales/personalizadas de una sola empresa.
+ */
+export const EMPRESA_GLOBAL = 0;
+
 @Unique(['empresa_id', 'codigo'])
 @Entity('plan_cuentas')
 export class Account {
@@ -25,7 +32,9 @@ export class Account {
   @Column()
   empresa_id: number;
 
-  @ManyToOne(() => Company, (empresa) => empresa.id)
+  @ManyToOne(() => Company, (empresa) => empresa.id, {
+    createForeignKeyConstraints: false,
+  })
   @JoinColumn({ name: 'empresa_id' })
   empresa: Company;
 

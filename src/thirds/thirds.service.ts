@@ -5,11 +5,11 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { Third } from './entities/third.entity';
 import { CreateThirdDto } from './dto/create-third.dto';
 import { UpdateThirdDto } from './dto/update-third.dto';
-import { Account } from '../accounts/entities/account.entity';
+import { Account, EMPRESA_GLOBAL } from '../accounts/entities/account.entity';
 
 @Injectable()
 export class ThirdsService {
@@ -23,7 +23,7 @@ export class ThirdsService {
   private async validarCuenta(empresaId: number, cuentaId?: number) {
     if (!cuentaId) return;
     const cuenta = await this.cuentaRepo.findOne({
-      where: { id: cuentaId, empresa_id: empresaId },
+      where: { id: cuentaId, empresa_id: In([EMPRESA_GLOBAL, empresaId]) },
     });
     if (!cuenta) {
       throw new BadRequestException(
@@ -55,14 +55,15 @@ export class ThirdsService {
     };
 
     const terminos = palabras[tipoTerceros] || palabras[5];
+    const empresaIds = [EMPRESA_GLOBAL, empresaId];
     const qb = this.cuentaRepo
       .createQueryBuilder('c')
-      .where('c.empresa_id = :empresaId', { empresaId })
+      .where('c.empresa_id IN (:...empresaIds)', { empresaIds })
       .andWhere('c.estado = 1');
 
     // Construir OR con LIKE por cada término (código o nombre)
     const condiciones: string[] = [];
-    const params: any = { empresaId };
+    const params: any = { empresaIds };
     terminos.forEach((t, i) => {
       condiciones.push(
         `(LOWER(c.codigo) LIKE :t${i} OR LOWER(c.nombre) LIKE :t${i})`,

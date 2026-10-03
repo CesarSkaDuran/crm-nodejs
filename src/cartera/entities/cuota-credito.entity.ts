@@ -1,5 +1,6 @@
 import {
   Entity,
+  Index,
   PrimaryGeneratedColumn,
   Column,
   ManyToOne,
@@ -15,6 +16,8 @@ export enum EstadoCuota {
   PARCIAL = 3, // Abonada pero no completada
 }
 
+@Index('idx_cuotas_credito_empresa', ['empresa_id'])
+@Index('idx_cuotas_credito_credito', ['credito_id'])
 @Entity('cuotas_credito')
 export class CuotaCredito {
   @PrimaryGeneratedColumn()

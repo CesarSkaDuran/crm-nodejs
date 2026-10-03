@@ -1,11 +1,13 @@
 import {
   Entity,
+  Index,
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
   UpdateDateColumn,
 } from 'typeorm';
 
+@Index('idx_tesoreria_empresa', ['empresa_id'])
 @Entity('tesoreria')
 export class Tesoreria {
   @PrimaryGeneratedColumn()

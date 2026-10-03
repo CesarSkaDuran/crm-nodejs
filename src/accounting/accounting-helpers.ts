@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
-import { Repository } from 'typeorm';
-import { Account } from '../accounts/entities/account.entity';
+import { In, Repository } from 'typeorm';
+import { Account, EMPRESA_GLOBAL } from '../accounts/entities/account.entity';
 import { Cierre, EstadoCierre } from '../cierres/entities/cierre.entity';
 import { Moneda } from '../monedas/entities/moneda.entity';
 
@@ -39,7 +39,7 @@ export async function findAccountByKeywords(
   keywords: string[],
 ): Promise<Account | null> {
   const cuentas = await accountRepo.find({
-    where: { empresa_id: empresaId, estado: 1 },
+    where: { empresa_id: In([EMPRESA_GLOBAL, empresaId]), estado: 1 },
   });
 
   // Filtramos keywords vacíos y evitamos matches accidentales por código
@@ -103,22 +103,28 @@ export async function resolveBancoCuenta(
     );
   }
 
-  // 1. Match exacto por código
+  const empresaIds = [EMPRESA_GLOBAL, empresaId];
+
+  // 1. Match exacto por código (preferir la cuenta propia sobre la global)
   let cuenta = await accountRepo.findOne({
-    where: { codigo: ref, empresa_id: empresaId },
+    where: { codigo: ref, empresa_id: In(empresaIds) },
+    order: { empresa_id: 'DESC' },
   });
 
   // 2. Si no hay match, buscar por código normalizado (sin puntos)
   if (!cuenta) {
     const refSinPuntos = ref.replace(/\./g, '');
-    const todas = await accountRepo.find({ where: { empresa_id: empresaId } });
+    const todas = await accountRepo.find({
+      where: { empresa_id: In(empresaIds) },
+      order: { empresa_id: 'DESC' },
+    });
     cuenta = todas.find((c) => (c.codigo || '').replace(/\./g, '') === refSinPuntos) || null;
   }
 
   // 3. Fallback: si es numérico, buscar por id
   if (!cuenta && /^\d+$/.test(ref)) {
     cuenta = await accountRepo.findOne({
-      where: { id: Number(ref), empresa_id: empresaId },
+      where: { id: Number(ref), empresa_id: In(empresaIds) },
     });
   }
 
@@ -197,7 +203,7 @@ export async function cuentaDiferenciaCambio(
 ): Promise<Account> {
   const prefijo = esGanancia ? '4.2.10' : '5.3.05';
   const cuentas = await accountRepo.find({
-    where: { empresa_id: empresaId, estado: 1 },
+    where: { empresa_id: In([EMPRESA_GLOBAL, empresaId]), estado: 1 },
   });
   const cuenta = cuentas.find(
     (c) =>
@@ -234,7 +240,7 @@ export async function cuentaGastoBancario(
       : '5.3.05.15 GMF 4X1000';
 
   const cuentas = await accountRepo.find({
-    where: { empresa_id: empresaId, estado: 1 },
+    where: { empresa_id: In([EMPRESA_GLOBAL, empresaId]), estado: 1 },
   });
   const esCandidata = (c: Account) =>
     Number(c.clasificacion) === 4 &&

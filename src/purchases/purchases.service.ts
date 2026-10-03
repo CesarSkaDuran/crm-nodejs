@@ -4,14 +4,14 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, In } from 'typeorm';
 import { Purchase } from './entities/purchase.entity';
 import { PurchaseDetail } from './entities/purchase-detail.entity';
 import { CreatePurchaseDto } from './dto/create-purchase.dto';
 import { Product } from '../products/entities/product.entity';
 import { Third } from '../thirds/entities/third.entity';
 import { Company } from '../companies/entities/company.entity';
-import { Account } from '../accounts/entities/account.entity';
+import { Account, EMPRESA_GLOBAL } from '../accounts/entities/account.entity';
 import { Banco } from '../bancos/entities/banco.entity';
 import { Kardex } from '../kardex/entities/kardex.entity';
 import { Moneda } from '../monedas/entities/moneda.entity';
@@ -108,7 +108,10 @@ export class PurchasesService {
       }
 
       const cuentaProveedor = await cuentaRepo.findOne({
-        where: { id: proveedor.cuenta_contable_id, empresa_id: empresaId },
+        where: {
+          id: proveedor.cuenta_contable_id,
+          empresa_id: In([EMPRESA_GLOBAL, empresaId]),
+        },
       });
       if (!cuentaProveedor) {
         throw new BadRequestException(
@@ -762,7 +765,10 @@ export class PurchasesService {
 
         if (lineaPagoBanco) {
           const cuentaPago = await cuentaRepo.findOne({
-            where: { id: lineaPagoBanco.cuenta_contable_id, empresa_id: empresaId },
+            where: {
+              id: lineaPagoBanco.cuenta_contable_id,
+              empresa_id: In([EMPRESA_GLOBAL, empresaId]),
+            },
           });
           if (!cuentaPago) {
             throw new BadRequestException(

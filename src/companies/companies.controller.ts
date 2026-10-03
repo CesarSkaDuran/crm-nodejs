@@ -32,7 +32,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 export class CompaniesController {
   constructor(private readonly companiesService: CompaniesService) {}
 
-  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
+  @Roles(UserRole.SUPERADMIN)
   @Post()
   create(@Body() dto: CreateCompanyDto) {
     return this.companiesService.create(dto);
@@ -96,17 +96,19 @@ export class CompaniesController {
     return this.companiesService.guardarLogo(usuario.empresa_id, ruta);
   }
 
+  @Roles(UserRole.SUPERADMIN)
   @Get()
   findAll() {
     return this.companiesService.findAll();
   }
 
+  @Roles(UserRole.SUPERADMIN)
   @Get(':id')
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.companiesService.findOne(id);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
+  @Roles(UserRole.SUPERADMIN)
   @Patch(':id')
   update(
     @Param('id', ParseIntPipe) id: number,
@@ -115,7 +117,7 @@ export class CompaniesController {
     return this.companiesService.update(id, dto);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
+  @Roles(UserRole.SUPERADMIN)
   @Delete(':id')
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.companiesService.remove(id);

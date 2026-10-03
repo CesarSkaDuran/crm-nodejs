@@ -1,8 +1,8 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between } from 'typeorm';
+import { Repository, Between, In } from 'typeorm';
 import { AccountingEntryLine } from '../accounting/entities/accounting-entry.entity';
-import { Account } from '../accounts/entities/account.entity';
+import { Account, EMPRESA_GLOBAL } from '../accounts/entities/account.entity';
 import { CuotaCredito, EstadoCuota } from '../cartera/entities/cuota-credito.entity';
 import { Credito, TipoCredito, EstadoCredito } from '../cartera/entities/credito.entity';
 import { Banco } from '../bancos/entities/banco.entity';
@@ -662,7 +662,7 @@ export class ReportesService {
     fechaFin: string,
   ) {
     const cuentas = await this.cuentaRepo.find({
-      where: { empresa_id: empresaId, estado: 1 },
+      where: { empresa_id: In([EMPRESA_GLOBAL, empresaId]), estado: 1 },
     });
     const idsDif = new Set(
       cuentas

@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AccountsService } from './accounts.service';
+import { Account, EMPRESA_GLOBAL } from './entities/account.entity';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -27,12 +28,16 @@ export class AccountsController {
   constructor(private readonly accountsService: AccountsService) {}
 
   @Post()
-  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
+  @Roles(UserRole.SUPERADMIN, UserRole.ADMIN, UserRole.CONTADOR)
   create(
     @Body() dto: CreateAccountDto,
     @CurrentUser() usuario: any,
   ) {
-    return this.accountsService.create(dto, usuario.empresa_id);
+    return this.accountsService.create(
+      dto,
+      usuario.empresa_id,
+      usuario.rol === UserRole.SUPERADMIN,
+    );
   }
 
   /**
@@ -42,7 +47,7 @@ export class AccountsController {
    * Retorna: { creados, actualizados, errores, total }
    */
   @Post('import')
-  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
+  @Roles(UserRole.SUPERADMIN, UserRole.ADMIN, UserRole.CONTADOR)
   importar(
     @Body() body: { filas: any[] },
     @CurrentUser() usuario: any,
@@ -50,7 +55,11 @@ export class AccountsController {
     if (!body?.filas || !Array.isArray(body.filas)) {
       return { creados: 0, actualizados: 0, errores: [{ error: 'Se requiere un arreglo "filas"' }], total: 0 };
     }
-    return this.accountsService.importar(body.filas, usuario.empresa_id);
+    return this.accountsService.importar(
+      body.filas,
+      usuario.empresa_id,
+      usuario.rol === UserRole.SUPERADMIN,
+    );
   }
 
   @Get()
@@ -59,29 +68,48 @@ export class AccountsController {
   }
 
   @Get(':id')
-  findOne(
+  async findOne(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() usuario: any,
   ) {
-    return this.accountsService.findOne(id, usuario.empresa_id);
+    const cuenta = await this.accountsService.findOne(id, usuario.empresa_id);
+    const empresaIds = [EMPRESA_GLOBAL, Number(usuario.empresa_id)];
+    const visible = (relacion: Account) =>
+      empresaIds.includes(Number(relacion.empresa_id));
+    return {
+      ...cuenta,
+      cuenta_padre: cuenta.cuenta_padre && visible(cuenta.cuenta_padre)
+        ? cuenta.cuenta_padre
+        : null,
+      hijas: (cuenta.hijas || []).filter(visible),
+    };
   }
 
   @Patch(':id')
-  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
+  @Roles(UserRole.SUPERADMIN, UserRole.ADMIN, UserRole.CONTADOR)
   update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateAccountDto,
     @CurrentUser() usuario: any,
   ) {
-    return this.accountsService.update(id, usuario.empresa_id, dto);
+    return this.accountsService.update(
+      id,
+      usuario.empresa_id,
+      dto,
+      usuario.rol === UserRole.SUPERADMIN,
+    );
   }
 
   @Delete(':id')
-  @Roles(UserRole.ADMIN, UserRole.CONTADOR)
+  @Roles(UserRole.SUPERADMIN, UserRole.ADMIN, UserRole.CONTADOR)
   remove(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() usuario: any,
   ) {
-    return this.accountsService.remove(id, usuario.empresa_id);
+    return this.accountsService.remove(
+      id,
+      usuario.empresa_id,
+      usuario.rol === UserRole.SUPERADMIN,
+    );
   }
 }

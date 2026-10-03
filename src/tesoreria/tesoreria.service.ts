@@ -5,12 +5,12 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, DataSource, EntityManager } from 'typeorm';
+import { Repository, DataSource, EntityManager, In } from 'typeorm';
 import { Tesoreria } from './entities/tesoreria.entity';
 import { CreateTesoreriaDto } from './dto/create-tesoreria.dto';
 import { UpdateTesoreriaDto } from './dto/update-tesoreria.dto';
 import { Banco } from '../bancos/entities/banco.entity';
-import { Account } from '../accounts/entities/account.entity';
+import { Account, EMPRESA_GLOBAL } from '../accounts/entities/account.entity';
 import { Company } from '../companies/entities/company.entity';
 import {
   AccountingEntry,
@@ -135,7 +135,10 @@ export class TesoreriaService {
 
       // Validar cuenta de contrapartida
       const contraCuenta = await cuentaRepo.findOne({
-        where: { id: dto.cuenta_contrapartida_id, empresa_id: empresaId },
+        where: {
+          id: dto.cuenta_contrapartida_id,
+          empresa_id: In([EMPRESA_GLOBAL, empresaId]),
+        },
       });
       if (!contraCuenta) {
         throw new BadRequestException(
@@ -508,7 +511,10 @@ export class TesoreriaService {
         bancoNuevo.nombre,
       );
       const contraCuenta = await cuentaRepo.findOne({
-        where: { id: nuevaContrapartida, empresa_id: empresaId },
+        where: {
+          id: nuevaContrapartida,
+          empresa_id: In([EMPRESA_GLOBAL, empresaId]),
+        },
       });
       if (!contraCuenta) {
         throw new BadRequestException(

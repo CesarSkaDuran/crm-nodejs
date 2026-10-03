@@ -1,5 +1,6 @@
 import {
   Entity,
+  Index,
   PrimaryGeneratedColumn,
   Column,
   ManyToOne,
@@ -11,6 +12,7 @@ import {
 import { Account } from '../../accounts/entities/account.entity';
 import { Third } from '../../thirds/entities/third.entity';
 
+@Index('idx_asentados_empresa', ['empresa_id'])
 @Entity('asentados')
 export class AccountingEntry {
   @PrimaryGeneratedColumn()
@@ -58,6 +60,8 @@ export class AccountingEntry {
   updated_at: Date;
 }
 
+@Index('idx_contabilidad_empresa', ['empresa_id'])
+@Index('idx_contabilidad_asentado', ['asentado_id'])
 @Entity('contabilidad')
 export class AccountingEntryLine {
   @PrimaryGeneratedColumn()

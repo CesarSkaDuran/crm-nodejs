@@ -1,8 +1,8 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Brackets } from 'typeorm';
+import { Repository, Brackets, In } from 'typeorm';
 import { AccountingEntryLine } from '../accounting/entities/accounting-entry.entity';
-import { Account } from '../accounts/entities/account.entity';
+import { Account, EMPRESA_GLOBAL } from '../accounts/entities/account.entity';
 
 // Fase 2: Funciones utilitarias extraídas a informes.helpers.ts
 import {
@@ -100,7 +100,10 @@ export class InformesService {
     this.validarRangoFechas(date, date2);
 
     const cuenta = await this.accountRepo.findOne({
-      where: { id: Number(cuenta_id), empresa_id: empresaId },
+      where: {
+        id: Number(cuenta_id),
+        empresa_id: In([EMPRESA_GLOBAL, empresaId]),
+      },
     });
 
     if (!cuenta) {
@@ -134,8 +137,8 @@ export class InformesService {
     this.validarRangoFechas(date, date2);
 
     const [desde, hasta] = await Promise.all([
-      this.accountRepo.findOne({ where: { id: Number(desde_id), empresa_id: empresaId } }),
-      this.accountRepo.findOne({ where: { id: Number(hasta_id), empresa_id: empresaId } }),
+      this.accountRepo.findOne({ where: { id: Number(desde_id), empresa_id: In([EMPRESA_GLOBAL, empresaId]) } }),
+      this.accountRepo.findOne({ where: { id: Number(hasta_id), empresa_id: In([EMPRESA_GLOBAL, empresaId]) } }),
     ]);
 
     if (!desde) {
@@ -173,7 +176,10 @@ export class InformesService {
     this.validarRangoFechas(date, date2);
 
     const cuenta = await this.accountRepo.findOne({
-      where: { id: Number(cuenta_id), empresa_id: empresaId },
+      where: {
+        id: Number(cuenta_id),
+        empresa_id: In([EMPRESA_GLOBAL, empresaId]),
+      },
     });
 
     if (!cuenta) {
@@ -221,7 +227,9 @@ export class InformesService {
       .addSelect('a.naturaleza', 'naturaleza')
       .addSelect('a.clasificacion', 'clasificacion')
       .addSelect('a.cuenta_padre_id', 'cuenta_padre_id')
-      .where('a.empresa_id = :empresaId', { empresaId });
+      .where('a.empresa_id IN (:...empresaIds)', {
+        empresaIds: [EMPRESA_GLOBAL, empresaId],
+      });
 
     if (range) {
       // Fix 1: Traer todas las cuentas y filtrar por rango jerárquico en memoria.
@@ -811,7 +819,9 @@ export class InformesService {
       .addSelect('a.naturaleza', 'naturaleza')
       .addSelect('a.clasificacion', 'clasificacion')
       .addSelect('a.cuenta_padre_id', 'cuenta_padre_id')
-      .where('a.empresa_id = :empresaId', { empresaId })
+      .where('a.empresa_id IN (:...empresaIds)', {
+        empresaIds: [EMPRESA_GLOBAL, empresaId],
+      })
       .andWhere('(a.clase = :c1 OR a.clase = :c2 OR a.clase = :c3)', {
         c1: '1',
         c2: '2',
@@ -1274,7 +1284,7 @@ export class InformesService {
       FROM contabilidad c
       INNER JOIN plan_cuentas p ON p.id = c.cuenta_contable_id
       WHERE c.empresa_id = ?
-        AND p.empresa_id = ?
+        AND p.empresa_id IN (0, ?)
         AND p.clase IN ('4', '5', '6')
         AND p.clasificacion = 4
         ${dateFilter}
@@ -1388,7 +1398,7 @@ export class InformesService {
       FROM contabilidad c
       INNER JOIN plan_cuentas p ON p.id = c.cuenta_contable_id
       WHERE c.empresa_id = ?
-        AND p.empresa_id = ?
+        AND p.empresa_id IN (0, ?)
         AND p.clase IN ('4', '5', '6')
         AND p.clasificacion = 4
         ${dateFilter}

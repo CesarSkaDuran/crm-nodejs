@@ -7,11 +7,11 @@ import {
 import { existsSync, unlink } from 'fs';
 import { join } from 'path';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull, Not } from 'typeorm';
+import { Repository, IsNull, Not, In } from 'typeorm';
 import { Product } from './entities/product.entity';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
-import { Account } from '../accounts/entities/account.entity';
+import { Account, EMPRESA_GLOBAL } from '../accounts/entities/account.entity';
 import { Categoria } from '../categorias/entities/categoria.entity';
 import { Kardex } from '../kardex/entities/kardex.entity';
 
@@ -241,7 +241,7 @@ export class ProductsService {
    */
   private async asignarCuentasPorDefecto(producto: Partial<Product>, empresaId: number) {
     const cuentas = await this.accountRepo.find({
-      where: { empresa_id: empresaId, estado: 1 },
+      where: { empresa_id: In([EMPRESA_GLOBAL, empresaId]), estado: 1 },
     });
     if (!cuentas.length) return;
 
@@ -621,7 +621,7 @@ export class ProductsService {
 
   async sugerirCuentas(tipo: number, categoria: string, empresaId: number) {
     const cuentas = await this.accountRepo.find({
-      where: { empresa_id: empresaId, estado: 1 },
+      where: { empresa_id: In([EMPRESA_GLOBAL, empresaId]), estado: 1 },
     });
 
     const categoriaLower = (categoria || '').toLowerCase();

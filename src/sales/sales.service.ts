@@ -4,14 +4,14 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, In } from 'typeorm';
 import { Sale } from './entities/sale.entity';
 import { SaleDetail } from './entities/sale-detail.entity';
 import { CreateSaleDto } from './dto/create-sale.dto';
 import { Product } from '../products/entities/product.entity';
 import { Third } from '../thirds/entities/third.entity';
 import { Company } from '../companies/entities/company.entity';
-import { Account } from '../accounts/entities/account.entity';
+import { Account, EMPRESA_GLOBAL } from '../accounts/entities/account.entity';
 import { Kardex } from '../kardex/entities/kardex.entity';
 import {
   AccountingEntry,
@@ -108,7 +108,10 @@ export class SalesService {
       }
 
       const cuentaCliente = await cuentaRepo.findOne({
-        where: { id: cliente.cuenta_contable_id, empresa_id: empresaId },
+        where: {
+          id: cliente.cuenta_contable_id,
+          empresa_id: In([EMPRESA_GLOBAL, empresaId]),
+        },
       });
       if (!cuentaCliente) {
         throw new BadRequestException(

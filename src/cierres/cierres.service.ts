@@ -5,7 +5,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, DataSource, Between } from 'typeorm';
+import { Repository, DataSource, Between, In } from 'typeorm';
 import { Cierre, EstadoCierre } from './entities/cierre.entity';
 import { CreateCierreDto } from './dto/create-cierre.dto';
 import { Kardex } from '../kardex/entities/kardex.entity';
@@ -17,7 +17,7 @@ import {
   AccountingEntryLine,
 } from '../accounting/entities/accounting-entry.entity';
 import { Company } from '../companies/entities/company.entity';
-import { Account } from '../accounts/entities/account.entity';
+import { Account, EMPRESA_GLOBAL } from '../accounts/entities/account.entity';
 import { Auditoria, TipoOperacion } from '../auditoria/entities/auditoria.entity';
 import { round2, assertBalanced, requireAccountByKeywords } from '../accounting/accounting-helpers';
 
@@ -493,7 +493,7 @@ export class CierresService {
       // Puede ser auxiliar (clasificacion 4) o el nivel más profundo que
       // exista en el PUC de la empresa (algunos PUC la dejan en nivel 3).
       const cuentas = await cuentaRepo.find({
-        where: { empresa_id: empresaId, estado: 1 },
+        where: { empresa_id: In([EMPRESA_GLOBAL, empresaId]), estado: 1 },
       });
       const maxClasif = Math.max(
         ...cuentas.map((c) => Number(c.clasificacion) || 0),

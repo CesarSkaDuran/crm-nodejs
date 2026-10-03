@@ -3,7 +3,7 @@ import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, DataSource, LessThanOrEqual, Not, In } from 'typeorm';
 import { Third } from '../thirds/entities/third.entity';
 import { AccountingEntryLine, AccountingEntry } from '../accounting/entities/accounting-entry.entity';
-import { Account } from '../accounts/entities/account.entity';
+import { Account, EMPRESA_GLOBAL } from '../accounts/entities/account.entity';
 import { Banco } from '../bancos/entities/banco.entity';
 import { Company } from '../companies/entities/company.entity';
 import { Credito, TipoCredito, PeriodoCredito, EstadoCredito } from '../cartera/entities/credito.entity';
@@ -373,7 +373,7 @@ export class CuentasPorPagarService {
 
       // Asiento contable: crédito a cuenta por pagar del proveedor, débito a contrapartida
       const proveedorCuenta = await accountRepo.findOne({
-        where: { id: tercero.cuenta_contable_id, empresa_id: empresaId },
+        where: { id: tercero.cuenta_contable_id, empresa_id: In([EMPRESA_GLOBAL, empresaId]) },
       });
       if (!proveedorCuenta) {
         throw new BadRequestException('La cuenta contable del proveedor no existe');
@@ -550,7 +550,7 @@ export class CuentasPorPagarService {
       if (descuento > 0) {
         cuentaDescuento = dto.cuenta_descuento_id
           ? await accountRepo.findOne({
-              where: { id: dto.cuenta_descuento_id, empresa_id: empresaId },
+              where: { id: dto.cuenta_descuento_id, empresa_id: In([EMPRESA_GLOBAL, empresaId]) },
             })
           : await this.buscarCuentaDescuento(accountRepo, empresaId);
         if (!cuentaDescuento) {
@@ -1171,7 +1171,7 @@ export class CuentasPorPagarService {
     empresaId: number,
   ): Promise<Account | null> {
     const cuentas = await accountRepo.find({
-      where: { empresa_id: empresaId, estado: 1 },
+      where: { empresa_id: In([EMPRESA_GLOBAL, empresaId]), estado: 1 },
     });
     // Para un crédito manual a proveedor, la contrapartida lógica es:
     // 1. Cuenta de gasto/costo (5xxx, 6xxx) — lo más común al registrar una obligación
@@ -1197,7 +1197,7 @@ export class CuentasPorPagarService {
     empresaId: number,
   ): Promise<Account | null> {
     const cuentas = await accountRepo.find({
-      where: { empresa_id: empresaId, estado: 1 },
+      where: { empresa_id: In([EMPRESA_GLOBAL, empresaId]), estado: 1 },
     });
     const codigos = ['4.2.10.40', '4.2.10', '421040', '4210'];
     for (const codigo of codigos) {
@@ -1218,7 +1218,7 @@ export class CuentasPorPagarService {
     empresaId: number,
   ): Promise<Account | null> {
     const cuentas = await accountRepo.find({
-      where: { empresa_id: empresaId, estado: 1 },
+      where: { empresa_id: In([EMPRESA_GLOBAL, empresaId]), estado: 1 },
     });
     const codigos = ['5.3.05.20', '5.3.05', '530520', '5305'];
     for (const codigo of codigos) {

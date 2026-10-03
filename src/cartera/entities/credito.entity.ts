@@ -1,5 +1,6 @@
 import {
   Entity,
+  Index,
   PrimaryGeneratedColumn,
   Column,
   ManyToOne,
@@ -30,6 +31,7 @@ export enum EstadoCredito {
   ANULADO = 0,
 }
 
+@Index('idx_creditos_empresa', ['empresa_id'])
 @Entity('creditos')
 export class Credito {
   @PrimaryGeneratedColumn()

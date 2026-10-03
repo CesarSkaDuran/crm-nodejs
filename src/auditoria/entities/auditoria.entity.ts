@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
+import { Entity, Index, PrimaryGeneratedColumn, Column } from 'typeorm';
 
 export enum TipoOperacion {
   CREAR = 'CREATE',
@@ -7,6 +7,7 @@ export enum TipoOperacion {
   ANULAR = 'ANULAR',
 }
 
+@Index('idx_auditoria_empresa', ['empresa_id'])
 @Entity('auditoria')
 export class Auditoria {
   @PrimaryGeneratedColumn()

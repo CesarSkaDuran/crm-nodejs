@@ -3,7 +3,7 @@ import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, DataSource, LessThanOrEqual, Not, In } from 'typeorm';
 import { Third } from '../thirds/entities/third.entity';
 import { AccountingEntryLine, AccountingEntry } from '../accounting/entities/accounting-entry.entity';
-import { Account } from '../accounts/entities/account.entity';
+import { Account, EMPRESA_GLOBAL } from '../accounts/entities/account.entity';
 import { Banco } from '../bancos/entities/banco.entity';
 import { Company } from '../companies/entities/company.entity';
 import { Credito, TipoCredito, PeriodoCredito, EstadoCredito } from './entities/credito.entity';
@@ -404,7 +404,7 @@ export class CarteraService {
 
       // Crear asiento contable: débito a cuenta por cobrar del cliente
       const clienteCuenta = await accountRepo.findOne({
-        where: { id: tercero.cuenta_contable_id, empresa_id: empresaId },
+        where: { id: tercero.cuenta_contable_id, empresa_id: In([EMPRESA_GLOBAL, empresaId]) },
       });
       if (!clienteCuenta) {
         throw new BadRequestException('La cuenta contable del cliente no existe');
@@ -584,7 +584,7 @@ export class CarteraService {
       if (descuento > 0) {
         cuentaDescuento = dto.cuenta_descuento_id
           ? await accountRepo.findOne({
-              where: { id: dto.cuenta_descuento_id, empresa_id: empresaId },
+              where: { id: dto.cuenta_descuento_id, empresa_id: In([EMPRESA_GLOBAL, empresaId]) },
             })
           : await this.buscarCuentaDescuento(accountRepo, empresaId);
         if (!cuentaDescuento) {
@@ -1265,7 +1265,7 @@ export class CarteraService {
       );
 
       const cuentas = await accountRepo.find({
-        where: { empresa_id: empresaId, estado: 1 },
+        where: { empresa_id: In([EMPRESA_GLOBAL, empresaId]), estado: 1 },
       });
       const porCodigo = (codigos: string[]) =>
         cuentas.find((c) => codigos.includes(c.codigo)) ||
@@ -1531,7 +1531,7 @@ export class CarteraService {
     empresaId: number,
   ): Promise<Account | null> {
     const cuentas = await accountRepo.find({
-      where: { empresa_id: empresaId, estado: 1 },
+      where: { empresa_id: In([EMPRESA_GLOBAL, empresaId]), estado: 1 },
     });
     // Para un crédito manual a cliente, la contrapartida lógica es:
     // 1. Cuenta de ingreso (4xxx) — venta de bienes/servicios a crédito
@@ -1554,7 +1554,7 @@ export class CarteraService {
     empresaId: number,
   ): Promise<Account | null> {
     const cuentas = await accountRepo.find({
-      where: { empresa_id: empresaId, estado: 1 },
+      where: { empresa_id: In([EMPRESA_GLOBAL, empresaId]), estado: 1 },
     });
     const codigos = ['4.1.75', '4.2.75', '5.3.05.35', '4175', '4275', '530535'];
     for (const codigo of codigos) {
@@ -1575,7 +1575,7 @@ export class CarteraService {
     empresaId: number,
   ): Promise<Account | null> {
     const cuentas = await accountRepo.find({
-      where: { empresa_id: empresaId, estado: 1 },
+      where: { empresa_id: In([EMPRESA_GLOBAL, empresaId]), estado: 1 },
     });
     const codigos = ['4.2.10.05', '4.2.10', '421005', '4210'];
     for (const codigo of codigos) {

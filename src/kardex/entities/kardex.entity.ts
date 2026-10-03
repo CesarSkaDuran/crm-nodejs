@@ -1,5 +1,6 @@
 import {
   Entity,
+  Index,
   PrimaryGeneratedColumn,
   Column,
   ManyToOne,
@@ -8,6 +9,8 @@ import {
 } from 'typeorm';
 import { Product } from '../../products/entities/product.entity';
 
+@Index('idx_kardex_empresa', ['empresa_id'])
+@Index('idx_kardex_producto', ['producto_id'])
 @Entity('kardex')
 export class Kardex {
   @PrimaryGeneratedColumn()

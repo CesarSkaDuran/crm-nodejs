@@ -7,7 +7,7 @@ import { Product } from '../products/entities/product.entity';
 import { Company } from '../companies/entities/company.entity';
 import { Kardex } from '../kardex/entities/kardex.entity';
 import { AccountingEntry, AccountingEntryLine } from '../accounting/entities/accounting-entry.entity';
-import { Account } from '../accounts/entities/account.entity';
+import { Account, EMPRESA_GLOBAL } from '../accounts/entities/account.entity';
 import { CreateInventarioDto, ConsolidarInventarioDto, FinalizarInventarioDto } from './dto/inventario-fisico.dto';
 import { round2, assertBalanced, assertPeriodoAbierto } from '../accounting/accounting-helpers';
 import { Cierre } from '../cierres/entities/cierre.entity';
@@ -333,7 +333,7 @@ export class InventarioFisicoService {
       // auxiliares del plan (PUC punteado: 1.4 inventarios, 6.1 costo,
       // 4.2 otros ingresos para sobrantes).
       const cuentas = await accountRepo.find({
-        where: { empresa_id: empresaId, estado: 1 },
+        where: { empresa_id: In([EMPRESA_GLOBAL, empresaId]), estado: 1 },
       });
       const aux = (prefijo: string) =>
         cuentas.find(

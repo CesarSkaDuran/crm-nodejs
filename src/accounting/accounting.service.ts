@@ -4,12 +4,12 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import {
   AccountingEntry,
   AccountingEntryLine,
 } from './entities/accounting-entry.entity';
-import { Account } from '../accounts/entities/account.entity';
+import { Account, EMPRESA_GLOBAL } from '../accounts/entities/account.entity';
 import { Cierre } from '../cierres/entities/cierre.entity';
 import { CreateAsentadoDto } from './dto/create-accounting-entry.dto';
 import { assertPeriodoAbierto } from './accounting-helpers';
@@ -163,7 +163,10 @@ export class AccountingService {
 
     for (const d of dto.detalles) {
       const cuenta = await this.accountRepo.findOne({
-        where: { id: d.cuenta_contable_id, empresa_id: empresaId },
+        where: {
+          id: d.cuenta_contable_id,
+          empresa_id: In([EMPRESA_GLOBAL, empresaId]),
+        },
       });
       if (!cuenta) {
         throw new BadRequestException(

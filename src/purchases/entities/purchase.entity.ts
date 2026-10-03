@@ -1,5 +1,6 @@
 import {
   Entity,
+  Index,
   PrimaryGeneratedColumn,
   Column,
   ManyToOne,
@@ -12,6 +13,7 @@ import { Company } from '../../companies/entities/company.entity';
 import { Third } from '../../thirds/entities/third.entity';
 import { PurchaseDetail } from './purchase-detail.entity';
 
+@Index('idx_compras_empresa', ['empresa_id'])
 @Entity('compras')
 export class Purchase {
   @PrimaryGeneratedColumn()

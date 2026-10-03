@@ -3,10 +3,11 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Account } from './entities/account.entity';
+import { In, Repository } from 'typeorm';
+import { Account, EMPRESA_GLOBAL } from './entities/account.entity';
 import { AccountingEntryLine } from '../accounting/entities/accounting-entry.entity';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
@@ -20,10 +21,24 @@ export class AccountsService {
     private readonly lineaRepo: Repository<AccountingEntryLine>,
   ) {}
 
+  /** PUC base compartido (empresa_id=0) + cuentas propias de la empresa. */
+  private visibles(empresaId: number) {
+    return In([EMPRESA_GLOBAL, empresaId]);
+  }
+
+  private assertPuedeModificar(cuenta: Account, esSuperadmin: boolean) {
+    if (Number(cuenta.empresa_id) === EMPRESA_GLOBAL && !esSuperadmin) {
+      throw new ForbiddenException(
+        'Las cuentas del Plan Único de Cuentas base solo las puede ' +
+          'modificar el administrador de la plataforma',
+      );
+    }
+  }
+
   private async validarPadre(empresaId: number, padreId?: number) {
     if (!padreId) return;
     const padre = await this.repo.findOne({
-      where: { id: padreId, empresa_id: empresaId },
+      where: { id: padreId, empresa_id: this.visibles(empresaId) },
     });
     if (!padre) {
       throw new BadRequestException(
@@ -32,25 +47,35 @@ export class AccountsService {
     }
   }
 
-  async create(dto: CreateAccountDto, empresaId: number) {
-    const exists = await this.repo.findOne({
-      where: { codigo: dto.codigo, empresa_id: empresaId },
-    });
+  async create(dto: CreateAccountDto, empresaId: number, esSuperadmin = false) {
+    // El superadmin crea cuentas del PUC base (empresa_id=0); una empresa
+    // crea cuentas especiales visibles solo para ella. En ambos casos el
+    // código no puede colisionar con el catálogo visible.
+    const exists = await this.repo.findOne(
+      esSuperadmin
+        ? { where: { codigo: dto.codigo } }
+        : { where: { codigo: dto.codigo, empresa_id: this.visibles(empresaId) } },
+    );
     if (exists) {
       throw new ConflictException(
-        'El código de cuenta ya existe en esta empresa',
+        exists.empresa_id === EMPRESA_GLOBAL
+          ? 'El código de cuenta ya existe en el Plan Único de Cuentas base'
+          : 'El código de cuenta ya existe en esta empresa',
       );
     }
 
     await this.validarPadre(empresaId, dto.cuenta_padre_id);
 
-    const cuenta = this.repo.create({ ...dto, empresa_id: empresaId });
+    const cuenta = this.repo.create({
+      ...dto,
+      empresa_id: esSuperadmin ? EMPRESA_GLOBAL : empresaId,
+    });
     return this.repo.save(cuenta);
   }
 
   async findAll(empresaId: number) {
     const cuentas = await this.repo.find({
-      where: { empresa_id: empresaId },
+      where: { empresa_id: this.visibles(empresaId) },
       order: { codigo: 'ASC' },
     });
 
@@ -71,12 +96,13 @@ export class AccountsService {
     return cuentas.map((c) => ({
       ...c,
       movimientos: movMap.get(c.id) || 0,
+      es_global: Number(c.empresa_id) === EMPRESA_GLOBAL,
     }));
   }
 
   async findOne(id: number, empresaId: number) {
     const cuenta = await this.repo.findOne({
-      where: { id, empresa_id: empresaId },
+      where: { id, empresa_id: this.visibles(empresaId) },
       relations: ['cuenta_padre', 'hijas'],
     });
     if (!cuenta) {
@@ -85,8 +111,14 @@ export class AccountsService {
     return cuenta;
   }
 
-  async update(id: number, empresaId: number, dto: UpdateAccountDto) {
+  async update(
+    id: number,
+    empresaId: number,
+    dto: UpdateAccountDto,
+    esSuperadmin = false,
+  ) {
     const cuenta = await this.findOne(id, empresaId);
+    this.assertPuedeModificar(cuenta, esSuperadmin);
 
     // Trazabilidad: una cuenta con movimientos contables no puede cambiar
     // código, naturaleza ni clasificación — eso redefiniría el sentido de
@@ -102,9 +134,12 @@ export class AccountsService {
         String(dto[campo]) !== String(cuenta[campo]),
     );
     if (cambiaEstructura) {
-      const movimientos = await this.lineaRepo.count({
-        where: { cuenta_contable_id: id, empresa_id: empresaId },
-      });
+      // Una cuenta global puede tener movimientos en CUALQUIER empresa.
+      const movWhere: any = { cuenta_contable_id: id };
+      if (Number(cuenta.empresa_id) !== EMPRESA_GLOBAL) {
+        movWhere.empresa_id = empresaId;
+      }
+      const movimientos = await this.lineaRepo.count({ where: movWhere });
       if (movimientos > 0) {
         throw new BadRequestException(
           `La cuenta ${cuenta.codigo} ${cuenta.nombre} tiene ${movimientos} ` +
@@ -116,12 +151,21 @@ export class AccountsService {
     }
 
     if (dto.codigo && dto.codigo !== cuenta.codigo) {
-      const exists = await this.repo.findOne({
-        where: { codigo: dto.codigo, empresa_id: empresaId },
-      });
+      const exists = await this.repo.findOne(
+        esSuperadmin
+          ? { where: { codigo: dto.codigo } }
+          : {
+              where: {
+                codigo: dto.codigo,
+                empresa_id: this.visibles(empresaId),
+              },
+            },
+      );
       if (exists) {
         throw new ConflictException(
-          'El código de cuenta ya existe en esta empresa',
+          exists.empresa_id === EMPRESA_GLOBAL
+            ? 'El código de cuenta ya existe en el Plan Único de Cuentas base'
+            : 'El código de cuenta ya existe en esta empresa',
         );
       }
     }
@@ -139,10 +183,14 @@ export class AccountsService {
     return this.repo.save(cuenta);
   }
 
-  async remove(id: number, empresaId: number) {
+  async remove(id: number, empresaId: number, esSuperadmin = false) {
     const cuenta = await this.findOne(id, empresaId);
+    this.assertPuedeModificar(cuenta, esSuperadmin);
+
+    // Las subcuentas pueden pertenecer a cualquier empresa si la cuenta es
+    // global (una empresa puede colgar cuentas especiales del PUC base).
     const hijas = await this.repo.count({
-      where: { cuenta_padre_id: id, empresa_id: empresaId },
+      where: { cuenta_padre_id: id },
     });
     if (hijas > 0) {
       throw new BadRequestException(
@@ -151,10 +199,13 @@ export class AccountsService {
     }
 
     // Trazabilidad: una cuenta con movimientos (aunque estén anulados) no
-    // se puede borrar; solo se puede desactivar (estado=0).
-    const movimientos = await this.lineaRepo.count({
-      where: { cuenta_contable_id: id, empresa_id: empresaId },
-    });
+    // se puede borrar; solo se puede desactivar (estado=0). Una cuenta
+    // global puede tener movimientos en cualquier empresa.
+    const movWhere: any = { cuenta_contable_id: id };
+    if (Number(cuenta.empresa_id) !== EMPRESA_GLOBAL) {
+      movWhere.empresa_id = empresaId;
+    }
+    const movimientos = await this.lineaRepo.count({ where: movWhere });
     if (movimientos > 0) {
       throw new BadRequestException(
         `La cuenta ${cuenta.codigo} ${cuenta.nombre} tiene ${movimientos} ` +
@@ -186,18 +237,24 @@ export class AccountsService {
   async importar(
     filas: any[],
     empresaId: number,
+    esSuperadmin = false,
   ): Promise<{ creados: number; actualizados: number; errores: any[]; total: number }> {
     const errores: any[] = [];
     let creados = 0;
     let actualizados = 0;
 
-    // Pre-cargar cuentas existentes
+    // Pre-cargar cuentas existentes: propias + PUC base compartido.
+    // Las globales (empresa_id=0) se usan para resolver padres y detectar
+    // códigos ya existentes, pero una empresa normal NO las modifica.
     const codigos = filas
       .map((f) => (f.codigo ?? '').toString().trim())
       .filter((c) => c.length > 0);
     const existentes = codigos.length
       ? await this.repo.find({
-          where: codigos.map((codigo) => ({ codigo, empresa_id: empresaId })),
+          where: codigos.map((codigo) => ({
+            codigo,
+            empresa_id: esSuperadmin ? EMPRESA_GLOBAL : this.visibles(empresaId),
+          })),
         })
       : [];
     const cuentaMap = new Map<string, Account>();
@@ -271,12 +328,24 @@ export class AccountsService {
         };
 
         const existente = cuentaMap.get(codigo);
+        if (
+          existente &&
+          Number(existente.empresa_id) === EMPRESA_GLOBAL &&
+          !esSuperadmin
+        ) {
+          // Ya existe en el PUC base: se respeta, no se modifica ni
+          // duplica una cuenta global con datos de una empresa.
+          continue;
+        }
         if (existente) {
           Object.assign(existente, dto);
           await this.repo.save(existente);
           actualizados++;
         } else {
-          const cuentaNueva = this.repo.create({ ...dto, empresa_id: empresaId }) as unknown as Account;
+          const cuentaNueva = this.repo.create({
+            ...dto,
+            empresa_id: esSuperadmin ? EMPRESA_GLOBAL : empresaId,
+          }) as unknown as Account;
           const guardada = await this.repo.save(cuentaNueva);
           cuentaMap.set(codigo, guardada);
           creados++;

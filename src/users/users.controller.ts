@@ -46,6 +46,33 @@ export class UsersController {
     return this.usersService.findAll(usuario.empresa_id);
   }
 
+  @Post('empresa/:empresaId')
+  @Roles(UserRole.SUPERADMIN)
+  createForEmpresa(
+    @Param('empresaId', ParseIntPipe) empresaId: number,
+    @Body() dto: CreateUserDto,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.usersService.create(dto, empresaId, usuario.nombre);
+  }
+
+  @Get('empresa/:empresaId')
+  @Roles(UserRole.SUPERADMIN)
+  findAllByEmpresa(@Param('empresaId', ParseIntPipe) empresaId: number) {
+    return this.usersService.findAll(empresaId);
+  }
+
+  @Patch('empresa/:empresaId/:userId')
+  @Roles(UserRole.SUPERADMIN)
+  updateForEmpresa(
+    @Param('empresaId', ParseIntPipe) empresaId: number,
+    @Param('userId', ParseIntPipe) userId: number,
+    @Body() dto: UpdateUserDto,
+    @CurrentUser() usuario: any,
+  ) {
+    return this.usersService.update(userId, empresaId, dto, usuario.nombre);
+  }
+
   @Get(':id')
   findOne(
     @Param('id', ParseIntPipe) id: number,

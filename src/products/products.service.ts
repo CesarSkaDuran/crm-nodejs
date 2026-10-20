@@ -435,7 +435,7 @@ export class ProductsService {
           descuento: Number(fila.descuento || 0),
           comision: Number(fila.comision || 0),
           peso: Number(fila.peso || 0),
-          tipo: Number(fila.tipo || 1),
+          tipo: this.normalizarTipoImportacion(fila.tipo),
           estado: 1,
         };
         if (categoriaId) {
@@ -488,6 +488,17 @@ export class ProductsService {
     }
 
     return { creados, actualizados, errores, total: filas.length };
+  }
+
+  private normalizarTipoImportacion(valor: unknown): number {
+    const tipo = String(valor ?? '').trim().toLowerCase();
+    if (tipo === 'servicio' || tipo === 'service' || Number(tipo) === 2) {
+      return 2;
+    }
+
+    // External sheets can use "tipo" for an unrelated label; keep those rows
+    // as products rather than passing NaN to MySQL.
+    return 1;
   }
 
   /**

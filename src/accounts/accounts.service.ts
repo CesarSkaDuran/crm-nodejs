@@ -73,11 +73,18 @@ export class AccountsService {
     return this.repo.save(cuenta);
   }
 
-  async findAll(empresaId: number) {
+  async findAll(empresaId: number, includeMovimientos = true) {
     const cuentas = await this.repo.find({
       where: { empresa_id: this.visibles(empresaId) },
       order: { codigo: 'ASC' },
     });
+
+    if (!includeMovimientos) {
+      return cuentas.map((c) => ({
+        ...c,
+        es_global: Number(c.empresa_id) === EMPRESA_GLOBAL,
+      }));
+    }
 
     // Marcar cuentas con movimientos contables (no se pueden eliminar).
     // Una sola consulta agrupada; incluye líneas anuladas porque también

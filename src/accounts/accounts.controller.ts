@@ -8,6 +8,7 @@ import {
   Delete,
   UseGuards,
   ParseIntPipe,
+  Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AccountsService } from './accounts.service';
@@ -63,8 +64,14 @@ export class AccountsController {
   }
 
   @Get()
-  findAll(@CurrentUser() usuario: any) {
-    return this.accountsService.findAll(usuario.empresa_id);
+  findAll(
+    @CurrentUser() usuario: any,
+    @Query('includeMovimientos') includeMovimientos?: string,
+  ) {
+    return this.accountsService.findAll(
+      usuario.empresa_id,
+      includeMovimientos !== 'false',
+    );
   }
 
   @Get(':id')

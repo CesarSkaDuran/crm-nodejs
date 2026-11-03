@@ -37,6 +37,7 @@ import { UnidadesMedidaModule } from './unidades-medida/unidades-medida.module';
 import { FormasPagoModule } from './formas-pago/formas-pago.module';
 import { PartidasRecurrentesModule } from './partidas-recurrentes/partidas-recurrentes.module';
 import { TrmModule } from './trm/trm.module';
+import { ContaAsistModule } from './contaasist/contaasist.module';
 
 @Module({
   imports: [
@@ -93,6 +94,7 @@ import { TrmModule } from './trm/trm.module';
     FormasPagoModule,
     PartidasRecurrentesModule,
     TrmModule,
+    ContaAsistModule,
   ],
   controllers: [AppController],
   providers: [AppService],
